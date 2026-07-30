@@ -7,8 +7,8 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIINfQ3XG/xcHhjMZ8O4oW6HhJj+1nQhAqM=" crossorigin="">
-  <link rel="stylesheet" href="styles.css">
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header>
@@ -18,7 +18,6 @@
     </div>
     <button id="locateBtn" class="secondary">Locate me</button>
   </header>
-
   <main>
     <div id="map" aria-label="Property map"></div>
 
@@ -28,7 +27,6 @@
         <button class="tab" data-tab="layout">2. Layout</button>
         <button class="tab" data-tab="saved">3. Saved</button>
       </div>
-
       <div id="boundaryTab" class="tabbody active">
         <div class="row">
           <button id="startWalkBtn">Start walking perimeter</button>
@@ -38,55 +36,36 @@
           <button id="finishWalkBtn" class="secondary">Finish boundary</button>
           <button id="clearBoundaryBtn" class="danger">Clear</button>
         </div>
-        <p class="help">
-          Walk the edge of the watering area. The app records points automatically, or use “Add GPS point” at corners.
-        </p>
+        <p class="help">Walk the edge of the watering area. The app records points automatically, or use “Add GPS point” at corners.</p>
         <div class="metrics">
           <div><span>GPS accuracy</span><strong id="accuracy">—</strong></div>
           <div><span>Boundary points</span><strong id="pointCount">0</strong></div>
           <div><span>Area</span><strong id="areaValue">—</strong></div>
         </div>
       </div>
-
       <div id="layoutTab" class="tabbody">
-        <label>
-          Spray measurement
-          <select id="measureMode">
-            <option value="radius">Radius</option>
-            <option value="diameter">Diameter</option>
-          </select>
+        <label>Spray measurement
+          <select id="measureMode"><option value="radius">Radius</option><option value="diameter">Diameter</option></select>
         </label>
-        <label>
-          Distance in feet
+        <label>Distance in feet
           <input id="spraySize" type="number" min="5" max="300" step="1" value="35">
         </label>
-        <label>
-          Coverage overlap
-          <select id="overlap">
-            <option value="0.90">Light overlap</option>
-            <option value="0.80" selected>Recommended</option>
-            <option value="0.70">Heavy overlap</option>
-          </select>
+        <label>Coverage overlap
+          <select id="overlap"><option value="0.90">Light overlap</option><option value="0.80" selected>Recommended</option><option value="0.70">Heavy overlap</option></select>
         </label>
         <div class="row">
           <button id="generateBtn">Suggest sprinkler locations</button>
           <button id="clearSprinklersBtn" class="danger">Clear layout</button>
         </div>
-        <p class="help">
-          Suggested markers are draggable. Their circles show the entered spray radius.
-        </p>
+        <p class="help">Suggested markers are draggable. Their circles show the entered spray radius.</p>
         <div class="metrics">
           <div><span>Sprinklers</span><strong id="sprinklerCount">0</strong></div>
           <div><span>Spray radius</span><strong id="radiusValue">35 ft</strong></div>
           <div><span>Estimated coverage</span><strong id="coverageValue">—</strong></div>
         </div>
       </div>
-
       <div id="savedTab" class="tabbody">
-        <label>
-          Plan name
-          <input id="planName" type="text" value="Dad's property">
-        </label>
+        <label>Plan name<input id="planName" type="text" value="Dad's property"></label>
         <div class="row">
           <button id="saveBtn">Save on this phone</button>
           <button id="loadBtn" class="secondary">Load saved plan</button>
@@ -95,15 +74,12 @@
           <button id="exportBtn" class="secondary">Export JSON</button>
           <label class="fileLabel">Import JSON<input id="importInput" type="file" accept=".json,application/json"></label>
         </div>
-        <p class="help">
-          This first version stores the plan on the phone. Export creates a backup file that can be moved to another device.
-        </p>
+        <p class="help">This version stores the plan on the phone. Export creates a backup file that can be moved to another device.</p>
       </div>
     </section>
   </main>
-
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>
