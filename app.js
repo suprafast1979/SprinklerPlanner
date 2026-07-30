@@ -20,6 +20,8 @@ let userMarker = null;
 let accuracyCircle = null;
 let watchId = null;
 let walking = false;
+let paused = false;
+let wakeLock = null;
 let boundary = [];
 let boundaryLine = null;
 let boundaryPolygon = null;
@@ -30,6 +32,28 @@ const $ = id => document.getElementById(id);
 const statusEl = $('status');
 
 function setStatus(text) { statusEl.textContent = text; }
+
+function saveDraft() {
+  localStorage.setItem('sprinklerPlannerDraft', JSON.stringify({ boundary, updatedAt: new Date().toISOString() }));
+}
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request('screen');
+  } catch (_) {}
+}
+
+async function releaseWakeLock() {
+  try { if (wakeLock) await wakeLock.release(); } catch (_) {}
+  wakeLock = null;
+}
+
+function updateWalkButtons() {
+  $('startWalkBtn').disabled = walking;
+  $('pauseWalkBtn').disabled = !walking;
+  $('finishWalkBtn').disabled = !walking || boundary.length < 3;
+  $('pauseWalkBtn').textContent = paused ? 'Resume' : 'Pause';
+}
 
 function feetToMeters(ft) { return Number(ft) * 0.3048; }
 function metersToFeet(m) { return m / 0.3048; }
@@ -109,6 +133,8 @@ function addBoundaryPoint(point, force = false) {
   if (!force && last && distanceMeters(last, point) < 2.5) return;
   boundary.push({ lat: point.lat, lng: point.lng });
   updateBoundaryDisplay();
+  updateWalkButtons();
+  saveDraft();
 }
 
 function updatePosition(pos) {
@@ -128,7 +154,7 @@ function updatePosition(pos) {
     accuracyCircle.setLatLng(p).setRadius(p.accuracy);
   }
 
-  if (walking && p.accuracy <= 12) addBoundaryPoint(p);
+  if (walking && !paused && p.accuracy <= 12) addBoundaryPoint(p);
   setStatus(`GPS active • accuracy ±${Math.round(metersToFeet(p.accuracy))} ft`);
 }
 
@@ -157,13 +183,17 @@ function startGPS(center = false) {
 
 function finishBoundary() {
   walking = false;
+  paused = false;
+  releaseWakeLock();
   if (boundary.length >= 3) {
     updateBoundaryDisplay();
     map.fitBounds(L.latLngBounds(boundary), { padding: [25, 25] });
-    setStatus('Boundary finished');
+    saveDraft();
+    setStatus('Boundary finished and saved on this device');
   } else {
     setStatus('Add at least 3 boundary points');
   }
+  updateWalkButtons();
 }
 
 function clearSprinklers() {
@@ -302,10 +332,25 @@ $('locateBtn').addEventListener('click', () => startGPS(true));
 $('startWalkBtn').addEventListener('click', () => {
   startGPS(true);
   walking = true;
+  paused = false;
   boundary = [];
   clearSprinklers();
   updateBoundaryDisplay();
-  setStatus('Walking perimeter • GPS points recording');
+  updateWalkButtons();
+  requestWakeLock();
+  setStatus('Recording perimeter • keep this page open');
+});
+$('pauseWalkBtn').addEventListener('click', () => {
+  if (!walking || paused) return;
+  paused = !paused;
+  if (paused) {
+    releaseWakeLock();
+    setStatus('Perimeter recording paused');
+  } else {
+    requestWakeLock();
+    setStatus('Perimeter recording resumed');
+  }
+  updateWalkButtons();
 });
 $('addPointBtn').addEventListener('click', () => {
   startGPS(false);
@@ -319,9 +364,13 @@ $('addPointBtn').addEventListener('click', () => {
 $('finishWalkBtn').addEventListener('click', finishBoundary);
 $('clearBoundaryBtn').addEventListener('click', () => {
   walking = false;
+  paused = false;
+  releaseWakeLock();
   boundary = [];
   clearSprinklers();
   updateBoundaryDisplay();
+  localStorage.removeItem('sprinklerPlannerDraft');
+  updateWalkButtons();
   setStatus('Boundary cleared');
 });
 $('generateBtn').addEventListener('click', generateLayout);
@@ -356,7 +405,7 @@ $('importInput').addEventListener('change', async event => {
 });
 
 map.on('click', e => {
-  if (!walking) return;
+  if (!walking || paused) return;
   addBoundaryPoint(e.latlng, true);
   setStatus('Manual boundary point added');
 });
@@ -365,4 +414,18 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./service-worker.js').catch(() => {});
 }
 
+try {
+  const draft = JSON.parse(localStorage.getItem('sprinklerPlannerDraft') || 'null');
+  if (draft && Array.isArray(draft.boundary) && draft.boundary.length) {
+    boundary = draft.boundary;
+    updateBoundaryDisplay();
+    map.fitBounds(L.latLngBounds(boundary), { padding: [25, 25] });
+    setStatus('Last boundary restored');
+  }
+} catch (_) {}
+updateWalkButtons();
 updateSprinklerMetrics();
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && walking && !paused) requestWakeLock();
+});

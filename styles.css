@@ -60,3 +60,8 @@ input, select {
   .panel { border-top: 0; border-left: 1px solid var(--border); overflow-y: auto; }
   .metrics { grid-template-columns: 1fr; }
 }
+
+.row.one { grid-template-columns: 1fr; }
+button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.recording-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#b3261e; margin-right:6px; animation:pulse 1.2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
