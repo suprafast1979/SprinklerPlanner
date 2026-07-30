@@ -1,431 +1,76 @@
+const map=L.map('map',{zoomControl:true}).setView([44.05,-123.1],16);
+const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap contributors'});
+const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,attribution:'Tiles &copy; Esri'}).addTo(map);
+L.control.layers({Satellite:imagery,Streets:street}).addTo(map);
+const $=id=>document.getElementById(id); const setStatus=t=>$('status').textContent=t;
+let currentPosition=null,userMarker=null,accuracyCircle=null,watchId=null,wakeLock=null;
+let walking=false,paused=false,drawingAvoid=false,editMode=false;
+let boundary=[],smoothedBoundary=[],noSprayAreas=[],currentAvoid=[];
+let boundaryLine=null,boundaryPolygon=null,currentAvoidLine=null;
+let noSprayLayers=[],vertexMarkers=[],sprinklers=[];
+let project={version:2,name:"Dad's property",zones:[]}; let activeZoneId=null;
 
-const map = L.map('map', { zoomControl: true }).setView([44.05, -123.1], 16);
+function feetToMeters(ft){return Number(ft)*0.3048} function metersToFeet(m){return m/0.3048}
+function distanceMeters(a,b){const R=6371000,p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dp=(b.lat-a.lat)*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180,h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
+function localXY(p,o){const R=6371000,lat0=o.lat*Math.PI/180;return{x:(p.lng-o.lng)*Math.PI/180*R*Math.cos(lat0),y:(p.lat-o.lat)*Math.PI/180*R}}
+function xyToLatLng(p,o){const R=6371000,lat0=o.lat*Math.PI/180;return{lat:o.lat+(p.y/R)*180/Math.PI,lng:o.lng+(p.x/(R*Math.cos(lat0)))*180/Math.PI}}
+function pointInPolygon(p,poly){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if(((a.y>p.y)!=(b.y>p.y))&&(p.x<(b.x-a.x)*(p.y-a.y)/((b.y-a.y)||Number.EPSILON)+a.x))inside=!inside}return inside}
+function polygonAreaMeters2(points){if(points.length<3)return 0;const o=points[0],xy=points.map(p=>localXY(p,o));let a=0;for(let i=0,j=xy.length-1;i<xy.length;j=i++)a+=xy[j].x*xy[i].y-xy[i].x*xy[j].y;return Math.abs(a/2)}
+function centroid(points){const o=points[0],xy=points.map(p=>localXY(p,o));let x=0,y=0;xy.forEach(p=>{x+=p.x;y+=p.y});return xyToLatLng({x:x/xy.length,y:y/xy.length},o)}
+function chaikin(points,iterations=2){if(points.length<3)return points.slice();let out=points.slice();for(let k=0;k<iterations;k++){const next=[];for(let i=0;i<out.length;i++){const a=out[i],b=out[(i+1)%out.length];next.push({lat:.75*a.lat+.25*b.lat,lng:.75*a.lng+.25*b.lng},{lat:.25*a.lat+.75*b.lat,lng:.25*a.lng+.75*b.lng})}out=next}return out}
+function activeBoundary(){return smoothedBoundary.length?smoothedBoundary:boundary}
+function saveDraft(){localStorage.setItem('sprinklerPlannerV4Draft',JSON.stringify(serializeZone()))}
+async function requestWakeLock(){try{if('wakeLock'in navigator&&!wakeLock)wakeLock=await navigator.wakeLock.request('screen')}catch(_){}}
+async function releaseWakeLock(){try{if(wakeLock)await wakeLock.release()}catch(_){}wakeLock=null}
 
-const street = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20,
-  attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
+function clearLayer(layer){if(layer){map.removeLayer(layer);return null}return null}
+function updateButtons(){$('startWalkBtn').disabled=walking;$('pauseWalkBtn').disabled=!walking;$('finishWalkBtn').disabled=!walking||boundary.length<3;$('pauseWalkBtn').textContent=paused?'Resume':'Pause';$('finishAvoidBtn').disabled=!drawingAvoid||currentAvoid.length<3;$('avoidDrawing').textContent=drawingAvoid?'Yes':'No'}
+function renderBoundary(){boundaryLine=clearLayer(boundaryLine);boundaryPolygon=clearLayer(boundaryPolygon);vertexMarkers.forEach(m=>map.removeLayer(m));vertexMarkers=[];const shown=activeBoundary();if(shown.length>=2)boundaryLine=L.polyline(shown,{color:'#176b3a',weight:4}).addTo(map);if(shown.length>=3&&!walking)boundaryPolygon=L.polygon(shown,{color:'#176b3a',weight:3,fillColor:'#4fae70',fillOpacity:.18}).addTo(map);if(editMode&&boundary.length){boundary.forEach((p,i)=>{const m=L.marker(p,{draggable:true,icon:L.divIcon({className:'',html:'<div class="vertex-icon"></div>',iconSize:[16,16],iconAnchor:[8,8]})}).addTo(map);m.on('drag',e=>{boundary[i]=e.target.getLatLng();smoothedBoundary=[];renderBoundary();saveDraft()});vertexMarkers.push(m)})}$('pointCount').textContent=boundary.length;const a=polygonAreaMeters2(shown);$('areaValue').textContent=a?`${Math.round(a*10.7639).toLocaleString()} sq ft`:'—';$('activeZoneLabel').textContent=$('zoneName').value||'Unnamed'}
+function renderAvoid(){noSprayLayers.forEach(l=>map.removeLayer(l));noSprayLayers=[];noSprayAreas.forEach((a,i)=>{const l=L.polygon(a.points,{color:'#b05c16',weight:3,fillColor:'#e48735',fillOpacity:.28}).addTo(map).bindPopup(a.name||`No-spray ${i+1}`);noSprayLayers.push(l)});currentAvoidLine=clearLayer(currentAvoidLine);if(currentAvoid.length)currentAvoidLine=L.polyline(currentAvoid,{color:'#b05c16',weight:4,dashArray:'7 5'}).addTo(map);$('avoidCount').textContent=noSprayAreas.length}
+function addBoundaryPoint(p,force=false){if(!p)return;const last=boundary.at(-1);if(!force&&last&&distanceMeters(last,p)<2.5)return;boundary.push({lat:p.lat,lng:p.lng});smoothedBoundary=[];renderBoundary();updateButtons();saveDraft()}
+function addAvoidPoint(p){currentAvoid.push({lat:p.lat,lng:p.lng});renderAvoid();updateButtons()}
 
-const imagery = L.tileLayer(
-  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  { maxZoom: 20, attribution: 'Tiles &copy; Esri' }
-);
+function updatePosition(pos){const p={lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy};currentPosition=p;$('accuracy').textContent=`±${Math.round(metersToFeet(p.accuracy))} ft`;if(!userMarker){userMarker=L.circleMarker(p,{radius:7,color:'#fff',weight:3,fillColor:'#176b3a',fillOpacity:1}).addTo(map);accuracyCircle=L.circle(p,{radius:p.accuracy,color:'#176b3a',weight:1,fillOpacity:.06}).addTo(map)}else{userMarker.setLatLng(p);accuracyCircle.setLatLng(p).setRadius(p.accuracy)}if(walking&&!paused&&p.accuracy<=12)addBoundaryPoint(p);setStatus(`GPS active • accuracy ±${Math.round(metersToFeet(p.accuracy))} ft`)}
+function startGPS(center=false){if(!navigator.geolocation)return setStatus('This browser does not support GPS');if(watchId!==null){if(center&&currentPosition)map.setView(currentPosition,19);return}setStatus('Requesting location permission…');watchId=navigator.geolocation.watchPosition(pos=>{updatePosition(pos);if(center){map.setView([pos.coords.latitude,pos.coords.longitude],19);center=false}},err=>setStatus(`GPS error: ${err.message}`),{enableHighAccuracy:true,maximumAge:0,timeout:20000})}
 
-L.control.layers({ Satellite: imagery, Streets: street }).addTo(map);
-imagery.addTo(map);
-street.remove();
+function clearSprinklers(){sprinklers.forEach(s=>{map.removeLayer(s.marker);map.removeLayer(s.shape)});sprinklers=[];updateLayoutMetrics()}
+function markerIcon(n){return L.divIcon({className:'',html:`<div class="sprinkler-icon">${n}</div>`,iconSize:[30,30],iconAnchor:[15,15]})}
+function bearingDeg(from,to){const o=from,a=localXY(to,o);return(Math.atan2(a.x,a.y)*180/Math.PI+360)%360}
+function nearestAvoidDirection(p){let best=null,bestD=Infinity;noSprayAreas.forEach(a=>a.points.forEach(q=>{const d=distanceMeters(p,q);if(d<bestD){bestD=d;best=q}}));return best?((bearingDeg(p,best)+180)%360):0}
+function addSprinkler(spec,index){let shape;if(spec.pattern==='rectangle'){const o=spec.position,corners=[[-spec.width/2,-spec.length/2],[spec.width/2,-spec.length/2],[spec.width/2,spec.length/2],[-spec.width/2,spec.length/2]].map(([x,y])=>{const t=spec.rotation*Math.PI/180;return xyToLatLng({x:x*Math.cos(t)-y*Math.sin(t),y:x*Math.sin(t)+y*Math.cos(t)},o)});shape=L.polygon(corners,{color:'#1670c5',weight:2,fillColor:'#3a91df',fillOpacity:.16}).addTo(map)}else if(spec.pattern==='sector'){const pts=[spec.position];const start=spec.rotation-spec.angle/2;for(let i=0;i<=24;i++){const a=(start+spec.angle*i/24)*Math.PI/180;pts.push(xyToLatLng({x:Math.sin(a)*spec.radius,y:Math.cos(a)*spec.radius},spec.position))}shape=L.polygon(pts,{color:'#1670c5',weight:2,fillColor:'#3a91df',fillOpacity:.16}).addTo(map)}else shape=L.circle(spec.position,{radius:spec.radius,color:'#1670c5',weight:2,fillColor:'#3a91df',fillOpacity:.16}).addTo(map);const marker=L.marker(spec.position,{draggable:true,icon:markerIcon(index+1)}).addTo(map);marker.bindPopup(`Sprinkler ${index+1}<br>${spec.pattern}${spec.pattern==='sector'?` • ${spec.angle}°`:''}`);marker.on('dragend',e=>{spec.position=e.target.getLatLng();generateLayout(false)});sprinklers.push({...spec,marker,shape})}
+function candidateAllowed(latlng,origin,zoneXY,avoidXY){const p=localXY(latlng,origin);if(!pointInPolygon(p,zoneXY))return false;return !avoidXY.some(poly=>pointInPolygon(p,poly))}
+function generateLayout(showStatus=true){const zone=activeBoundary();if(zone.length<3)return setStatus('Finish a zone boundary first');clearSprinklers();const pattern=$('pattern').value,priority=$('priority').value,origin=zone[0],zoneXY=zone.map(p=>localXY(p,origin)),avoidXY=noSprayAreas.map(a=>a.points.map(p=>localXY(p,origin)));const xs=zoneXY.map(p=>p.x),ys=zoneXY.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);let spacingX,spacingY,radius=feetToMeters($('spraySize').value||35),length=feetToMeters($('rectLength').value||50),width=feetToMeters($('rectWidth').value||30);const factor=priority==='fewest'?.95:priority==='coverage'?.65:.8;if(pattern==='rectangle'){spacingX=width*factor;spacingY=length*factor}else{spacingX=radius*2*factor;spacingY=spacingX*Math.sqrt(3)/2}const specs=[];let row=0;for(let y=minY;y<=maxY;y+=spacingY){const offset=(row%2)*spacingX/2;for(let x=minX+offset;x<=maxX;x+=spacingX){const latlng=xyToLatLng({x,y},origin);if(!candidateAllowed(latlng,origin,zoneXY,avoidXY))continue;if(pattern==='rectangle')specs.push({pattern,position:latlng,length,width,rotation:0});else if(pattern==='sector')specs.push({pattern,position:latlng,radius,angle:Number($('sectorAngle').value),rotation:nearestAvoidDirection(latlng)});else specs.push({pattern,position:latlng,radius})}row++}if(!specs.length){const c=centroid(zone);if(candidateAllowed(c,origin,zoneXY,avoidXY)){if(pattern==='rectangle')specs.push({pattern,position:c,length,width,rotation:0});else if(pattern==='sector')specs.push({pattern,position:c,radius,angle:Number($('sectorAngle').value),rotation:nearestAvoidDirection(c)});else specs.push({pattern,position:c,radius})}}specs.forEach(addSprinkler);updateLayoutMetrics();if(showStatus)setStatus(`Optimized ${specs.length} sprinkler location${specs.length===1?'':'s'}`)}
+function updatePatternControls(){const p=$('pattern').value;$('sectorControls').classList.toggle('hidden',p!=='sector');$('rectangleControls').classList.toggle('hidden',p!=='rectangle');$('roundControls').classList.toggle('hidden',p==='rectangle');$('patternValue').textContent=p==='circle'?'Circle':p==='sector'?'Sweep':'Rectangle'}
+function updateLayoutMetrics(){$('sprinklerCount').textContent=sprinklers.length;const area=polygonAreaMeters2(activeBoundary());if(!area||!sprinklers.length){$('coverageValue').textContent='—';return}let raw=0;sprinklers.forEach(s=>{raw+=s.pattern==='rectangle'?s.length*s.width:s.pattern==='sector'?Math.PI*s.radius*s.radius*(s.angle/360):Math.PI*s.radius*s.radius});$('coverageValue').textContent=`${Math.min(100,Math.round(raw/area*100))}% raw`}
 
-let currentPosition = null;
-let userMarker = null;
-let accuracyCircle = null;
-let watchId = null;
-let walking = false;
-let paused = false;
-let wakeLock = null;
-let boundary = [];
-let boundaryLine = null;
-let boundaryPolygon = null;
-let sprinklerMarkers = [];
-let sprinklerCircles = [];
+function serializeZone(){return{id:activeZoneId||crypto.randomUUID(),name:$('zoneName').value.trim()||'Unnamed zone',boundary,smoothedBoundary,noSprayAreas,settings:{pattern:$('pattern').value,spraySize:Number($('spraySize').value),sectorAngle:Number($('sectorAngle').value),rectLength:Number($('rectLength').value),rectWidth:Number($('rectWidth').value),priority:$('priority').value},sprinklers:sprinklers.map(s=>({pattern:s.pattern,position:s.position,radius:s.radius,angle:s.angle,rotation:s.rotation,length:s.length,width:s.width}))}}
+function loadZone(z){activeZoneId=z.id;$('zoneName').value=z.name||'Unnamed zone';boundary=z.boundary||[];smoothedBoundary=z.smoothedBoundary||[];noSprayAreas=z.noSprayAreas||[];const s=z.settings||{};$('pattern').value=s.pattern||'circle';$('spraySize').value=s.spraySize||35;$('sectorAngle').value=s.sectorAngle||180;$('rectLength').value=s.rectLength||50;$('rectWidth').value=s.rectWidth||30;$('priority').value=s.priority||'balanced';walking=paused=drawingAvoid=editMode=false;currentAvoid=[];renderBoundary();renderAvoid();clearSprinklers();(z.sprinklers||[]).forEach(addSprinkler);updatePatternControls();updateLayoutMetrics();if(boundary.length)map.fitBounds(L.latLngBounds(activeBoundary()),{padding:[25,25]});setStatus(`Loaded ${z.name}`)}
+function refreshZoneSelect(){const sel=$('zoneSelect');sel.innerHTML=project.zones.length?project.zones.map(z=>`<option value="${z.id}">${z.name}</option>`).join(''):'<option value="">No saved zones</option>'}
+function saveProjectLocal(){project.name=$('projectName').value.trim()||'Sprinkler project';localStorage.setItem('sprinklerPlannerProjectV4',JSON.stringify(project));refreshZoneSelect()}
+function resetZone(){activeZoneId=null;boundary=[];smoothedBoundary=[];noSprayAreas=[];currentAvoid=[];$('zoneName').value='New zone';walking=paused=drawingAvoid=editMode=false;clearSprinklers();renderBoundary();renderAvoid();updateButtons();setStatus('New blank zone')}
 
-const $ = id => document.getElementById(id);
-const statusEl = $('status');
-
-function setStatus(text) { statusEl.textContent = text; }
-
-function saveDraft() {
-  localStorage.setItem('sprinklerPlannerDraft', JSON.stringify({ boundary, updatedAt: new Date().toISOString() }));
-}
-
-async function requestWakeLock() {
-  try {
-    if ('wakeLock' in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request('screen');
-  } catch (_) {}
-}
-
-async function releaseWakeLock() {
-  try { if (wakeLock) await wakeLock.release(); } catch (_) {}
-  wakeLock = null;
-}
-
-function updateWalkButtons() {
-  $('startWalkBtn').disabled = walking;
-  $('pauseWalkBtn').disabled = !walking;
-  $('finishWalkBtn').disabled = !walking || boundary.length < 3;
-  $('pauseWalkBtn').textContent = paused ? 'Resume' : 'Pause';
-}
-
-function feetToMeters(ft) { return Number(ft) * 0.3048; }
-function metersToFeet(m) { return m / 0.3048; }
-
-function distanceMeters(a, b) {
-  const R = 6371000;
-  const p1 = a.lat * Math.PI / 180;
-  const p2 = b.lat * Math.PI / 180;
-  const dp = (b.lat - a.lat) * Math.PI / 180;
-  const dl = (b.lng - a.lng) * Math.PI / 180;
-  const h = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-function localXY(point, origin) {
-  const R = 6371000;
-  const lat0 = origin.lat * Math.PI / 180;
-  return {
-    x: (point.lng - origin.lng) * Math.PI / 180 * R * Math.cos(lat0),
-    y: (point.lat - origin.lat) * Math.PI / 180 * R
-  };
-}
-
-function xyToLatLng(p, origin) {
-  const R = 6371000;
-  const lat0 = origin.lat * Math.PI / 180;
-  return {
-    lat: origin.lat + (p.y / R) * 180 / Math.PI,
-    lng: origin.lng + (p.x / (R * Math.cos(lat0))) * 180 / Math.PI
-  };
-}
-
-function pointInPolygon(p, poly) {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x, yi = poly[i].y;
-    const xj = poly[j].x, yj = poly[j].y;
-    const intersect = ((yi > p.y) !== (yj > p.y)) &&
-      (p.x < (xj - xi) * (p.y - yi) / ((yj - yi) || Number.EPSILON) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function polygonAreaMeters2(points) {
-  if (points.length < 3) return 0;
-  const origin = points[0];
-  const xy = points.map(p => localXY(p, origin));
-  let area = 0;
-  for (let i = 0, j = xy.length - 1; i < xy.length; j = i++) {
-    area += xy[j].x * xy[i].y - xy[i].x * xy[j].y;
-  }
-  return Math.abs(area / 2);
-}
-
-function updateBoundaryDisplay() {
-  if (boundaryLine) map.removeLayer(boundaryLine);
-  if (boundaryPolygon) map.removeLayer(boundaryPolygon);
-
-  if (boundary.length >= 2) {
-    boundaryLine = L.polyline(boundary, { color: '#176b3a', weight: 4 }).addTo(map);
-  }
-  if (boundary.length >= 3 && !walking) {
-    boundaryPolygon = L.polygon(boundary, {
-      color: '#176b3a', weight: 3, fillColor: '#4fae70', fillOpacity: 0.18
-    }).addTo(map);
-  }
-
-  $('pointCount').textContent = boundary.length;
-  const areaM2 = polygonAreaMeters2(boundary);
-  $('areaValue').textContent = areaM2 ? `${Math.round(areaM2 * 10.7639).toLocaleString()} sq ft` : '—';
-}
-
-function addBoundaryPoint(point, force = false) {
-  if (!point) return;
-  const last = boundary[boundary.length - 1];
-  if (!force && last && distanceMeters(last, point) < 2.5) return;
-  boundary.push({ lat: point.lat, lng: point.lng });
-  updateBoundaryDisplay();
-  updateWalkButtons();
-  saveDraft();
-}
-
-function updatePosition(pos) {
-  const p = {
-    lat: pos.coords.latitude,
-    lng: pos.coords.longitude,
-    accuracy: pos.coords.accuracy
-  };
-  currentPosition = p;
-  $('accuracy').textContent = `±${Math.round(metersToFeet(p.accuracy))} ft`;
-
-  if (!userMarker) {
-    userMarker = L.circleMarker(p, { radius: 7, color: '#ffffff', weight: 3, fillColor: '#176b3a', fillOpacity: 1 }).addTo(map);
-    accuracyCircle = L.circle(p, { radius: p.accuracy, color: '#176b3a', weight: 1, fillOpacity: 0.06 }).addTo(map);
-  } else {
-    userMarker.setLatLng(p);
-    accuracyCircle.setLatLng(p).setRadius(p.accuracy);
-  }
-
-  if (walking && !paused && p.accuracy <= 12) addBoundaryPoint(p);
-  setStatus(`GPS active • accuracy ±${Math.round(metersToFeet(p.accuracy))} ft`);
-}
-
-function startGPS(center = false) {
-  if (!navigator.geolocation) {
-    setStatus('This browser does not support GPS');
-    return;
-  }
-  if (watchId !== null) {
-    if (center && currentPosition) map.setView(currentPosition, 19);
-    return;
-  }
-  setStatus('Requesting location permission…');
-  watchId = navigator.geolocation.watchPosition(
-    pos => {
-      updatePosition(pos);
-      if (center) {
-        map.setView([pos.coords.latitude, pos.coords.longitude], 19);
-        center = false;
-      }
-    },
-    err => setStatus(`GPS error: ${err.message}`),
-    { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
-  );
-}
-
-function finishBoundary() {
-  walking = false;
-  paused = false;
-  releaseWakeLock();
-  if (boundary.length >= 3) {
-    updateBoundaryDisplay();
-    map.fitBounds(L.latLngBounds(boundary), { padding: [25, 25] });
-    saveDraft();
-    setStatus('Boundary finished and saved on this device');
-  } else {
-    setStatus('Add at least 3 boundary points');
-  }
-  updateWalkButtons();
-}
-
-function clearSprinklers() {
-  sprinklerMarkers.forEach(m => map.removeLayer(m));
-  sprinklerCircles.forEach(c => map.removeLayer(c));
-  sprinklerMarkers = [];
-  sprinklerCircles = [];
-  updateSprinklerMetrics();
-}
-
-function getRadiusMeters() {
-  const sizeFt = Math.max(1, Number($('spraySize').value) || 35);
-  return feetToMeters($('measureMode').value === 'diameter' ? sizeFt / 2 : sizeFt);
-}
-
-function markerIcon(n) {
-  return L.divIcon({
-    className: '',
-    html: `<div class="sprinkler-icon">${n}</div>`,
-    iconSize: [30, 30],
-    iconAnchor: [15, 15]
-  });
-}
-
-function addSprinkler(latlng, radius, index) {
-  const circle = L.circle(latlng, {
-    radius, color: '#1670c5', weight: 2, fillColor: '#3a91df', fillOpacity: 0.16
-  }).addTo(map);
-
-  const marker = L.marker(latlng, { draggable: true, icon: markerIcon(index + 1) }).addTo(map);
-  marker.bindPopup(`Sprinkler ${index + 1}<br>Radius: ${Math.round(metersToFeet(radius))} ft`);
-  marker.on('drag', e => circle.setLatLng(e.target.getLatLng()));
-
-  sprinklerMarkers.push(marker);
-  sprinklerCircles.push(circle);
-}
-
-function generateLayout() {
-  if (boundary.length < 3) {
-    setStatus('Finish a boundary first');
-    return;
-  }
-
-  clearSprinklers();
-  const radius = getRadiusMeters();
-  const spacing = radius * 2 * Number($('overlap').value);
-  const rowSpacing = spacing * Math.sqrt(3) / 2;
-  const origin = boundary[0];
-  const poly = boundary.map(p => localXY(p, origin));
-
-  const xs = poly.map(p => p.x);
-  const ys = poly.map(p => p.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
-
-  const candidates = [];
-  let row = 0;
-  for (let y = minY; y <= maxY; y += rowSpacing) {
-    const offset = (row % 2) * spacing / 2;
-    for (let x = minX + offset; x <= maxX; x += spacing) {
-      const p = { x, y };
-      if (pointInPolygon(p, poly)) candidates.push(xyToLatLng(p, origin));
-    }
-    row++;
-  }
-
-  if (!candidates.length) {
-    const center = boundaryPolygon ? boundaryPolygon.getBounds().getCenter() : boundary[0];
-    candidates.push(center);
-  }
-
-  candidates.forEach((p, i) => addSprinkler(p, radius, i));
-  updateSprinklerMetrics();
-  setStatus(`Suggested ${candidates.length} sprinkler location${candidates.length === 1 ? '' : 's'}`);
-}
-
-function updateSprinklerMetrics() {
-  const radius = getRadiusMeters();
-  $('radiusValue').textContent = `${Math.round(metersToFeet(radius))} ft`;
-  $('sprinklerCount').textContent = sprinklerMarkers.length;
-
-  const boundaryArea = polygonAreaMeters2(boundary);
-  if (boundaryArea && sprinklerMarkers.length) {
-    const rawCoverage = sprinklerMarkers.length * Math.PI * radius * radius;
-    const ratio = Math.min(100, Math.round(rawCoverage / boundaryArea * 100));
-    $('coverageValue').textContent = `${ratio}% raw`;
-  } else {
-    $('coverageValue').textContent = '—';
-  }
-}
-
-function serializePlan() {
-  return {
-    version: 1,
-    name: $('planName').value.trim() || 'Sprinkler plan',
-    createdAt: new Date().toISOString(),
-    boundary,
-    measureMode: $('measureMode').value,
-    spraySize: Number($('spraySize').value),
-    overlap: $('overlap').value,
-    sprinklers: sprinklerMarkers.map(m => {
-      const p = m.getLatLng();
-      return { lat: p.lat, lng: p.lng };
-    })
-  };
-}
-
-function loadPlan(data) {
-  if (!data || !Array.isArray(data.boundary)) throw new Error('Invalid plan file');
-  boundary = data.boundary;
-  walking = false;
-  $('planName').value = data.name || 'Sprinkler plan';
-  $('measureMode').value = data.measureMode || 'radius';
-  $('spraySize').value = data.spraySize || 35;
-  $('overlap').value = data.overlap || '0.80';
-  updateBoundaryDisplay();
-  clearSprinklers();
-  const radius = getRadiusMeters();
-  (data.sprinklers || []).forEach((p, i) => addSprinkler(p, radius, i));
-  updateSprinklerMetrics();
-  if (boundary.length) map.fitBounds(L.latLngBounds(boundary), { padding: [25, 25] });
-  setStatus(`Loaded ${data.name || 'saved plan'}`);
-}
-
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tabbody').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    $(`${tab.dataset.tab}Tab`).classList.add('active');
-    setTimeout(() => map.invalidateSize(), 100);
-  });
-});
-
-$('locateBtn').addEventListener('click', () => startGPS(true));
-$('startWalkBtn').addEventListener('click', () => {
-  startGPS(true);
-  walking = true;
-  paused = false;
-  boundary = [];
-  clearSprinklers();
-  updateBoundaryDisplay();
-  updateWalkButtons();
-  requestWakeLock();
-  setStatus('Recording perimeter • keep this page open');
-});
-$('pauseWalkBtn').addEventListener('click', () => {
-  if (!walking || paused) return;
-  paused = !paused;
-  if (paused) {
-    releaseWakeLock();
-    setStatus('Perimeter recording paused');
-  } else {
-    requestWakeLock();
-    setStatus('Perimeter recording resumed');
-  }
-  updateWalkButtons();
-});
-$('addPointBtn').addEventListener('click', () => {
-  startGPS(false);
-  if (currentPosition) {
-    addBoundaryPoint(currentPosition, true);
-    setStatus('Corner point added');
-  } else {
-    setStatus('Waiting for GPS position');
-  }
-});
-$('finishWalkBtn').addEventListener('click', finishBoundary);
-$('clearBoundaryBtn').addEventListener('click', () => {
-  walking = false;
-  paused = false;
-  releaseWakeLock();
-  boundary = [];
-  clearSprinklers();
-  updateBoundaryDisplay();
-  localStorage.removeItem('sprinklerPlannerDraft');
-  updateWalkButtons();
-  setStatus('Boundary cleared');
-});
-$('generateBtn').addEventListener('click', generateLayout);
-$('clearSprinklersBtn').addEventListener('click', clearSprinklers);
-$('spraySize').addEventListener('input', updateSprinklerMetrics);
-$('measureMode').addEventListener('change', updateSprinklerMetrics);
-
-$('saveBtn').addEventListener('click', () => {
-  localStorage.setItem('sprinklerPlannerPlan', JSON.stringify(serializePlan()));
-  setStatus('Plan saved on this device');
-});
-$('loadBtn').addEventListener('click', () => {
-  const raw = localStorage.getItem('sprinklerPlannerPlan');
-  if (!raw) return setStatus('No saved plan found');
-  try { loadPlan(JSON.parse(raw)); } catch (e) { setStatus(e.message); }
-});
-$('exportBtn').addEventListener('click', () => {
-  const data = serializePlan();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${data.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-$('importInput').addEventListener('change', async event => {
-  const file = event.target.files[0];
-  if (!file) return;
-  try { loadPlan(JSON.parse(await file.text())); }
-  catch (e) { setStatus(`Import failed: ${e.message}`); }
-});
-
-map.on('click', e => {
-  if (!walking || paused) return;
-  addBoundaryPoint(e.latlng, true);
-  setStatus('Manual boundary point added');
-});
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./service-worker.js').catch(() => {});
-}
-
-try {
-  const draft = JSON.parse(localStorage.getItem('sprinklerPlannerDraft') || 'null');
-  if (draft && Array.isArray(draft.boundary) && draft.boundary.length) {
-    boundary = draft.boundary;
-    updateBoundaryDisplay();
-    map.fitBounds(L.latLngBounds(boundary), { padding: [25, 25] });
-    setStatus('Last boundary restored');
-  }
-} catch (_) {}
-updateWalkButtons();
-updateSprinklerMetrics();
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && walking && !paused) requestWakeLock();
-});
+// Tabs
+document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tabbody').forEach(t=>t.classList.remove('active'));tab.classList.add('active');$(`${tab.dataset.tab}Tab`).classList.add('active');setTimeout(()=>map.invalidateSize(),100)}));
+$('locateBtn').addEventListener('click',()=>startGPS(true));
+$('startWalkBtn').addEventListener('click',()=>{startGPS(true);walking=true;paused=false;boundary=[];smoothedBoundary=[];clearSprinklers();renderBoundary();updateButtons();requestWakeLock();setStatus('Recording perimeter • keep this page open')});
+$('pauseWalkBtn').addEventListener('click',()=>{if(!walking)return;paused=!paused;if(paused){releaseWakeLock();setStatus('Perimeter recording paused')}else{requestWakeLock();setStatus('Perimeter recording resumed')}updateButtons()});
+$('addPointBtn').addEventListener('click',()=>{startGPS(false);if(currentPosition){addBoundaryPoint(currentPosition,true);setStatus('GPS point added')}else setStatus('Waiting for GPS position')});
+$('finishWalkBtn').addEventListener('click',()=>{walking=false;paused=false;releaseWakeLock();if(boundary.length>=3){smoothedBoundary=chaikin(boundary,2);renderBoundary();map.fitBounds(L.latLngBounds(activeBoundary()),{padding:[25,25]});saveDraft();setStatus('Boundary finished and smoothed')}updateButtons()});
+$('smoothBtn').addEventListener('click',()=>{if(boundary.length<3)return setStatus('Add at least 3 boundary points');smoothedBoundary=chaikin(boundary,2);renderBoundary();saveDraft();setStatus('Boundary smoothed')});
+$('editBtn').addEventListener('click',()=>{editMode=!editMode;$('editBtn').textContent=editMode?'Done editing':'Edit points';renderBoundary();setStatus(editMode?'Drag the white boundary handles':'Boundary editing finished')});
+$('clearBoundaryBtn').addEventListener('click',resetZone);
+$('drawAvoidBtn').addEventListener('click',()=>{drawingAvoid=true;currentAvoid=[];walking=false;paused=false;renderAvoid();updateButtons();setStatus('Tap around the no-spray area')});
+$('finishAvoidBtn').addEventListener('click',()=>{if(currentAvoid.length<3)return;noSprayAreas.push({name:$('avoidName').value.trim()||`No-spray ${noSprayAreas.length+1}`,points:currentAvoid.slice()});currentAvoid=[];drawingAvoid=false;renderAvoid();updateButtons();saveDraft();setStatus('No-spray area saved')});
+$('deleteAvoidBtn').addEventListener('click',()=>{noSprayAreas.pop();renderAvoid();saveDraft();setStatus('Last no-spray area deleted')});
+$('clearAvoidBtn').addEventListener('click',()=>{noSprayAreas=[];currentAvoid=[];drawingAvoid=false;renderAvoid();updateButtons();saveDraft();setStatus('No-spray areas cleared')});
+$('pattern').addEventListener('change',updatePatternControls);$('generateBtn').addEventListener('click',()=>generateLayout(true));$('clearSprinklersBtn').addEventListener('click',clearSprinklers);
+$('saveZoneBtn').addEventListener('click',()=>{const z=serializeZone(),i=project.zones.findIndex(x=>x.id===z.id);if(i>=0)project.zones[i]=z;else project.zones.push(z);activeZoneId=z.id;saveProjectLocal();$('zoneSelect').value=z.id;setStatus(`Saved zone: ${z.name}`)});
+$('newZoneBtn').addEventListener('click',resetZone);$('loadZoneBtn').addEventListener('click',()=>{const z=project.zones.find(x=>x.id===$('zoneSelect').value);if(z)loadZone(z)});$('deleteZoneBtn').addEventListener('click',()=>{const id=$('zoneSelect').value;if(!id)return;project.zones=project.zones.filter(z=>z.id!==id);saveProjectLocal();resetZone();setStatus('Saved zone deleted')});
+$('exportBtn').addEventListener('click',()=>{saveProjectLocal();const blob=new Blob([JSON.stringify(project,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${project.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase()}.json`;a.click();URL.revokeObjectURL(url)});
+$('importInput').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.zones))throw new Error('Invalid project');project=data;$('projectName').value=project.name||'Imported project';saveProjectLocal();if(project.zones[0])loadZone(project.zones[0]);setStatus('Project imported')}catch(err){setStatus(`Import failed: ${err.message}`)}});
+map.on('click',e=>{if(drawingAvoid){addAvoidPoint(e.latlng);return}if(walking&&!paused){addBoundaryPoint(e.latlng,true);setStatus('Manual boundary point added')}});
+$('zoneName').addEventListener('input',()=>{$('activeZoneLabel').textContent=$('zoneName').value||'Unnamed'});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+try{const raw=localStorage.getItem('sprinklerPlannerProjectV4');if(raw){project=JSON.parse(raw);$('projectName').value=project.name||"Dad's property";refreshZoneSelect();if(project.zones[0])loadZone(project.zones[0])}else{const draft=JSON.parse(localStorage.getItem('sprinklerPlannerV4Draft')||'null');if(draft)loadZone(draft)}}catch(_){}
+updatePatternControls();renderBoundary();renderAvoid();updateButtons();refreshZoneSelect();updateLayoutMetrics();
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&walking&&!paused)requestWakeLock()});
