@@ -7,16 +7,16 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 <header>
-  <div><h1>Sprinkler Planner</h1><p id="status">Ready</p></div>
-  <button id="locateBtn" class="secondary">Locate me</button>
+  <div><h1>Sprinkler Planner</h1><p id="status">Finding your location…</p></div>
+  <div class="header-actions"><button id="plannerModeBtn" class="mode-btn active">Plan</button><button id="deployModeBtn" class="mode-btn">Set Up</button></div>
 </header>
 <main>
   <div id="map" aria-label="Property map"></div>
-  <section class="panel">
+  <section id="plannerPanel" class="panel">
     <div class="tabs">
       <button class="tab active" data-tab="projects">Projects</button>
       <button class="tab" data-tab="zone">Zone</button>
@@ -84,8 +84,29 @@
       <div class="metrics"><div><span>Overspray</span><strong id="oversprayValue">—</strong></div><div><span>Overlap score</span><strong id="overlapValue">—</strong></div><div><span>Recommendation</span><strong id="recommendValue">—</strong></div></div>
     </div>
   </section>
+
+  <section id="deployPanel" class="panel deploy-panel hidden">
+    <div class="deploy-head">
+      <div><span class="eyebrow">FIELD SETUP</span><h2 id="deployTitle">Choose a saved layout</h2><p id="deploySubtitle">Your closest saved zone will be selected automatically.</p></div>
+    </div>
+    <label>Saved layout<select id="deployZoneSelect"></select></label>
+    <div class="row"><button id="startDeployBtn">Start setup</button><button id="resumeDeployBtn" class="secondary">Resume</button></div>
+    <div id="deployActive" class="hidden">
+      <div class="target-card">
+        <span id="deployProgress">Sprinkler 1 of 1</span>
+        <strong id="deployDistance">Waiting for GPS…</strong>
+        <div id="deployDirection">Walk toward the highlighted sprinkler</div>
+      </div>
+      <div class="row"><button id="placedBtn">Placed</button><button id="skipBtn" class="secondary">Skip</button></div>
+      <div class="row"><button id="previousBtn" class="secondary">Previous</button><button id="endDeployBtn" class="danger">End setup</button></div>
+      <label class="check"><input id="voiceGuidance" type="checkbox" checked> Speak distance and arrival guidance</label>
+    </div>
+    <div id="deployEmpty" class="notice hidden">This saved zone does not have a sprinkler layout yet. Open Plan mode and optimize the layout first.</div>
+  </section>
+  <button id="floatingLocateBtn" class="floating-locate" aria-label="Center on my location">◎</button>
+  <button id="resumeFollowBtn" class="resume-follow hidden">Resume following</button>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

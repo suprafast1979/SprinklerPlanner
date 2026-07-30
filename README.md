@@ -1,38 +1,10 @@
-# Sprinkler Planner
+# Sprinkler Planner v6
 
-A mobile-friendly Progressive Web App for walking a property boundary and generating suggested portable-sprinkler locations.
+This release separates the application into two working modes:
 
-## What works
+- **Plan** — create projects and zones, record boundaries, define no-spray areas, manage inventory, and optimize layouts.
+- **Set Up** — select the nearest saved layout and walk through each sprinkler position using live GPS distance and direction guidance.
 
-- Live phone GPS with accuracy display
-- Automatic perimeter recording while walking
-- Manual corner points by GPS or map tap
-- Polygon area in square feet
-- Radius or diameter entry
-- Hex-style suggested sprinkler spacing
-- Draggable sprinkler markers and coverage circles
-- Save locally on the phone
-- Export/import JSON backups
-- Installable home-screen web app
+The application now requests GPS on startup, centers on the user's location, provides a persistent locate button, and supports follow mode during field setup.
 
-## Run locally
-
-Geolocation normally requires HTTPS or localhost.
-
-### Simple computer test
-
-From this folder:
-
-```bash
-python -m http.server 8080
-```
-
-Open `http://localhost:8080`.
-
-### Phone deployment
-
-Upload the folder to any HTTPS static host such as GitHub Pages, Cloudflare Pages, Netlify, or Firebase Hosting.
-
-## Important limitation
-
-Phone GPS often varies by several feet or more. Use the satellite image and drag suggested markers into their exact visible positions after recording the perimeter.
+For GitHub Pages, replace the repository files with the contents of this package and commit the changes. A hard refresh may be needed after deployment because the application uses a service worker.

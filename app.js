@@ -5,6 +5,7 @@ const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/
 L.control.layers({Satellite:imagery,Streets:street}).addTo(map);
 
 const STORE='sprinklerPlannerV5';
+let followUser=true,centerOnNextFix=true,userMovedMap=false,currentMode='planner',deployIndex=0,deployed=new Set(),deployZone=null,lastSpokenDistance=null;
 const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
 const ftToM=ft=>Number(ft)*.3048, mToFt=m=>m/.3048;
 function dist(a,b){const R=6371000,p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dp=(b.lat-a.lat)*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180,h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
@@ -15,14 +16,14 @@ function area(points){if(points.length<3)return 0;const o=points[0],q=points.map
 function chaikin(points,it=2){if(points.length<3)return points.slice();let out=points.slice();for(let k=0;k<it;k++){const n=[];for(let i=0;i<out.length;i++){const a=out[i],b=out[(i+1)%out.length];n.push({lat:.75*a.lat+.25*b.lat,lng:.75*a.lng+.25*b.lng},{lat:.25*a.lat+.75*b.lat,lng:.25*a.lng+.75*b.lng})}out=n}return out}
 function centroid(points){const o=points[0],q=points.map(p=>localXY(p,o));return ll({x:q.reduce((s,p)=>s+p.x,0)/q.length,y:q.reduce((s,p)=>s+p.y,0)/q.length},o)}
 
-let state={version:5,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
+let state={version:6,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
 let boundary=[],smooth=[],noSpray=[],sprinklers=[],currentAvoid=[];
 let walking=false,paused=false,drawingAvoid=false,editMode=false,addVertexMode=false,removeVertexMode=false;
 let watchId=null,currentPosition=null,gpsSamples=[];
 let userMarker,accuracyCircle,boundaryLine,boundaryPoly,currentAvoidLine;
 let avoidLayers=[],vertexMarkers=[],sprinklerLayers=[];
 
-function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:5,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
+function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:6,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
 function save(){localStorage.setItem(STORE,JSON.stringify(state))}
 function activeProject(){return state.projects.find(p=>p.id===state.activeProjectId)}
 function activeZone(){return activeProject()?.zones.find(z=>z.id===state.activeZoneId)}
@@ -45,8 +46,25 @@ function refreshSelectors(){const ps=$('projectSelect');ps.innerHTML=state.proje
 function renderInventory(){const box=$('inventoryList');box.innerHTML=state.inventory.length?'':'<p class="help">No sprinklers saved.</p>';state.inventory.forEach(item=>{const d=document.createElement('div');d.className='list-item';const desc=item.pattern==='rectangle'?`${item.length} × ${item.width} ft rectangle`:`${item.radius} ft radius${item.pattern==='sector'?`, ${item.angle}° max`:''}`;d.innerHTML=`<div><strong>${item.name} ×${item.qty}</strong><small>${desc}</small></div><button class="danger" data-id="${item.id}">Delete</button>`;d.querySelector('button').onclick=()=>{state.inventory=state.inventory.filter(x=>x.id!==item.id);save();refreshSelectors()};box.appendChild(d)})}
 function refreshLayoutChoices(){const s=$('layoutSprinklerSelect');s.innerHTML=state.inventory.length?state.inventory.map(x=>`<option value="${x.id}">${x.name} ×${x.qty}</option>`).join(''):'<option value="">Add a sprinkler first</option>'}
 
-function startGPS(center=false){if(!navigator.geolocation)return setStatus('Geolocation unavailable');if(watchId===null)watchId=navigator.geolocation.watchPosition(pos=>handleGPS(pos,center),err=>setStatus(`GPS: ${err.message}`),{enableHighAccuracy:true,maximumAge:0,timeout:20000})}
-function handleGPS(pos,center){const p={lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy,t:pos.timestamp};currentPosition=p;$('accuracy').textContent=`±${Math.round(mToFt(p.accuracy))} ft`;if(!userMarker){userMarker=L.circleMarker(p,{radius:7,color:'#fff',weight:2,fillColor:'#1b9b50',fillOpacity:1}).addTo(map);accuracyCircle=L.circle(p,{radius:p.accuracy,color:'#1b9b50',weight:1,fillOpacity:.08}).addTo(map)}else{userMarker.setLatLng(p);accuracyCircle.setLatLng(p).setRadius(p.accuracy)}if(center){map.setView(p,19);center=false}gpsSamples.push(p);gpsSamples=gpsSamples.filter(x=>p.t-x.t<8000).slice(-8);if(walking&&!paused)maybeRecordGPS(p)}
+function startGPS(center=false){
+  if(!navigator.geolocation)return setStatus('Geolocation unavailable');
+  if(center){centerOnNextFix=true;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
+  if(watchId===null)watchId=navigator.geolocation.watchPosition(handleGPS,err=>{
+    setStatus(err.code===1?'Location permission is needed to center the map':`GPS: ${err.message}`)
+  },{enableHighAccuracy:true,maximumAge:1500,timeout:20000})
+  else if(center&&currentPosition)centerMapOnUser();
+}
+function centerMapOnUser(){if(!currentPosition)return;map.setView(currentPosition,19);centerOnNextFix=false;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
+function handleGPS(pos){
+  const p={lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy,t:pos.timestamp};currentPosition=p;
+  $('accuracy').textContent=`±${Math.round(mToFt(p.accuracy))} ft`;
+  if(!userMarker){userMarker=L.circleMarker(p,{radius:7,color:'#fff',weight:2,fillColor:'#1b9b50',fillOpacity:1}).addTo(map);accuracyCircle=L.circle(p,{radius:p.accuracy,color:'#1b9b50',weight:1,fillOpacity:.08}).addTo(map)}else{userMarker.setLatLng(p);accuracyCircle.setLatLng(p).setRadius(p.accuracy)}
+  if(centerOnNextFix){centerMapOnUser();selectNearestDeployZone();setStatus('Location found')}
+  else if(followUser&&currentMode==='deploy')map.panTo(p,{animate:true,duration:.35});
+  gpsSamples.push(p);gpsSamples=gpsSamples.filter(x=>p.t-x.t<8000).slice(-8);
+  if(walking&&!paused)maybeRecordGPS(p);
+  updateDeployGuidance();
+}
 function averagedFix(){const limit=Number($('accuracyLimit').value),good=gpsSamples.filter(p=>p.accuracy<=limit);if(!good.length)return null;let w=0,lat=0,lng=0;good.forEach(p=>{const q=1/Math.max(1,p.accuracy*p.accuracy);w+=q;lat+=p.lat*q;lng+=p.lng*q});return{lat:lat/w,lng:lng/w,accuracy:Math.min(...good.map(p=>p.accuracy))}}
 function maybeRecordGPS(p){const limit=Number($('accuracyLimit').value);if(p.accuracy>limit)return;const q=averagedFix();if(!q)return;const last=boundary.at(-1);if(last){const d=dist(last,q);if(d<2.2)return;if(d>25&&p.accuracy>4)return}boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus(`Recording perimeter • ${boundary.length} points`)}
 function addAveragedPoint(){startGPS(false);const q=averagedFix();if(!q)return setStatus('Waiting for an accurate GPS fix');boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus('Averaged GPS point added')}
@@ -57,9 +75,65 @@ function updateCoverage(){const r=sampleCoverage();$('sprinklerCount').textConte
 function candidateAllowed(q,o,poly,avoids){const p=localXY(q,o);return pip(p,poly)&&!avoids.some(a=>pip(p,a))}
 function generateLayout(){const zone=displayBoundary(),item=state.inventory.find(x=>x.id===$('layoutSprinklerSelect').value);if(zone.length<3)return setStatus('Finish a zone boundary first');if(!item)return setStatus('Add a sprinkler to inventory first');sprinklers=[];const o=zone[0],poly=zone.map(p=>localXY(p,o)),avoids=noSpray.map(a=>a.points.map(p=>localXY(p,o))),xs=poly.map(p=>p.x),ys=poly.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);const mode=$('priority').value;let sx,sy;if(item.pattern==='rectangle'){const f=mode==='water'?.95:mode==='coverage'?.65:.8;sx=ftToM(item.width)*f;sy=ftToM(item.length)*f}else{const r=ftToM(item.radius),f=mode==='water'?1.75:mode==='coverage'?1.15:1.42;sx=r*f;sy=sx*.866}const max=$('inventoryOnly').checked?item.qty:999;let row=0;for(let y=minY;y<=maxY&&sprinklers.length<max;y+=sy){const off=(row++%2)*sx/2;for(let x=minX+off;x<=maxX&&sprinklers.length<max;x+=sx){const q=ll({x,y},o);if(!candidateAllowed(q,o,poly,avoids))continue;sprinklers.push({inventoryId:item.id,name:item.name,pattern:item.pattern,position:q,radius:ftToM(item.radius||0),angle:item.angle||360,length:ftToM(item.length||0),width:ftToM(item.width||0)})}}if(!sprinklers.length){const c=centroid(zone);sprinklers.push({inventoryId:item.id,name:item.name,pattern:item.pattern,position:c,radius:ftToM(item.radius||0),angle:item.angle||360,length:ftToM(item.length||0),width:ftToM(item.width||0)})}renderSprinklers();const r=sampleCoverage();if(r&&r.coverage<98&&$('inventoryOnly').checked&&sprinklers.length>=item.qty)$('recommendValue').textContent='More units may help';setStatus(`Placed ${sprinklers.length} ${item.name}${sprinklers.length===1?'':'s'}`)}
 
+
+function allSavedZones(){
+  const out=[];
+  state.projects.forEach(p=>(p.zones||[]).forEach(z=>out.push({project:p,zone:z})));
+  return out;
+}
+function zoneCenter(z){const pts=(z.smooth?.length?z.smooth:z.boundary)||[];return pts.length?centroid(pts):null}
+function refreshDeployChoices(){
+  const zones=allSavedZones(),sel=$('deployZoneSelect');
+  sel.innerHTML=zones.length?zones.map(({project,zone})=>`<option value="${project.id}|${zone.id}">${project.name} — ${zone.name}</option>`).join(''):'<option value="">No saved zones</option>';
+}
+function selectNearestDeployZone(){
+  refreshDeployChoices(); if(!currentPosition)return;
+  let best=null,bestD=Infinity;
+  allSavedZones().forEach(x=>{const c=zoneCenter(x.zone);if(c){const d=dist(currentPosition,c);if(d<bestD){bestD=d;best=x}}});
+  if(best){$('deployZoneSelect').value=`${best.project.id}|${best.zone.id}`;$('deploySubtitle').textContent=bestD<160?`${best.zone.name} is ${Math.round(mToFt(bestD))} ft away.`:`Closest saved layout: ${best.project.name} — ${best.zone.name}`}
+}
+function selectedDeployZone(){
+  const [pid,zid]=($('deployZoneSelect').value||'|').split('|');
+  const project=state.projects.find(p=>p.id===pid); return project?{project,zone:project.zones.find(z=>z.id===zid)}:null;
+}
+function setMode(mode){
+  currentMode=mode;
+  $('plannerPanel').classList.toggle('hidden',mode!=='planner');$('deployPanel').classList.toggle('hidden',mode!=='deploy');
+  $('plannerModeBtn').classList.toggle('active',mode==='planner');$('deployModeBtn').classList.toggle('active',mode==='deploy');
+  if(mode==='deploy'){refreshDeployChoices();selectNearestDeployZone();followUser=true;startGPS(true)}
+  setTimeout(()=>map.invalidateSize(),80);
+}
+function beginDeployment(resume=false){
+  const chosen=selectedDeployZone();if(!chosen?.zone)return setStatus('Save a zone first');
+  deployZone=chosen.zone;
+  if(!deployZone.sprinklers?.length){$('deployEmpty').classList.remove('hidden');$('deployActive').classList.add('hidden');return setStatus('This zone has no saved sprinkler layout')}
+  $('deployEmpty').classList.add('hidden');$('deployActive').classList.remove('hidden');
+  if(!resume){deployIndex=0;deployed=new Set();}
+  boundary=(deployZone.boundary||[]).map(p=>({...p}));smooth=(deployZone.smooth||[]).map(p=>({...p}));noSpray=(deployZone.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(deployZone.sprinklers||[]).map(s=>({...s}));
+  renderAll();showDeployTarget();startGPS(true);setStatus(`Setting up ${deployZone.name}`);
+}
+function speak(text){if(!$('voiceGuidance').checked||!('speechSynthesis'in window))return; speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text))}
+function showDeployTarget(){
+  if(!sprinklers.length)return;
+  if(deployIndex>=sprinklers.length){$('deployTitle').textContent='Setup complete';$('deployProgress').textContent=`${sprinklers.length} sprinklers placed`;$('deployDistance').textContent='Complete';$('deployDirection').textContent='All sprinkler positions have been visited.';speak('Sprinkler setup complete');return}
+  $('deployTitle').textContent=deployZone?.name||'Sprinkler setup';$('deployProgress').textContent=`Sprinkler ${deployIndex+1} of ${sprinklers.length}`;
+  sprinklerLayers.flat().forEach((layer,i)=>{if(layer?.getElement)layer.getElement()?.classList.toggle('deploy-target',Math.floor(i/2)===deployIndex)});
+  const target=sprinklers[deployIndex]?.position;if(target)map.panTo(target);updateDeployGuidance();
+}
+function compassDirection(from,to){const y=Math.sin((to.lng-from.lng)*Math.PI/180)*Math.cos(to.lat*Math.PI/180),x=Math.cos(from.lat*Math.PI/180)*Math.sin(to.lat*Math.PI/180)-Math.sin(from.lat*Math.PI/180)*Math.cos(to.lat*Math.PI/180)*Math.cos((to.lng-from.lng)*Math.PI/180);const d=(Math.atan2(y,x)*180/Math.PI+360)%360;return['north','northeast','east','southeast','south','southwest','west','northwest'][Math.round(d/45)%8]}
+function updateDeployGuidance(){
+  if(currentMode!=='deploy'||!deployZone||deployIndex>=sprinklers.length)return;
+  const target=sprinklers[deployIndex].position;if(!currentPosition){$('deployDistance').textContent='Waiting for GPS…';return}
+  const feet=Math.round(mToFt(dist(currentPosition,target)));$('deployDistance').textContent=feet<=5?'You are here':`${feet} ft`;$('deployDirection').textContent=feet<=5?'Place the sprinkler at the highlighted point':`Walk ${compassDirection(currentPosition,target)} toward the highlighted point`;
+  const bucket=feet<=5?0:feet<=15?Math.ceil(feet/3)*3:Math.ceil(feet/10)*10;if(bucket!==lastSpokenDistance&&(bucket===0||bucket<=30)){lastSpokenDistance=bucket;speak(bucket===0?'You have arrived. Place the sprinkler.':`${feet} feet`)}
+}
+function nextDeploy(markPlaced){if(deployIndex>=sprinklers.length)return;if(markPlaced)deployed.add(deployIndex);deployIndex++;lastSpokenDistance=null;showDeployTarget()}
+
 // Tabs
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabbody').forEach(x=>x.classList.remove('active'));t.classList.add('active');$(`${t.dataset.tab}Tab`).classList.add('active');setTimeout(()=>map.invalidateSize(),80)});
-$('locateBtn').onclick=()=>startGPS(true);
+$('plannerModeBtn').onclick=()=>setMode('planner');$('deployModeBtn').onclick=()=>setMode('deploy');$('startDeployBtn').onclick=()=>beginDeployment(false);$('resumeDeployBtn').onclick=()=>beginDeployment(true);$('placedBtn').onclick=()=>nextDeploy(true);$('skipBtn').onclick=()=>nextDeploy(false);$('previousBtn').onclick=()=>{deployIndex=Math.max(0,deployIndex-1);lastSpokenDistance=null;showDeployTarget()};$('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};$('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
+$('floatingLocateBtn').onclick=()=>startGPS(true);
+$('resumeFollowBtn').onclick=()=>startGPS(true);
 $('startWalkBtn').onclick=()=>{startGPS(true);walking=true;paused=false;boundary=[];smooth=[];sprinklers=[];renderAll();setStatus('Recording perimeter')};
 $('pauseWalkBtn').onclick=()=>{paused=!paused;updateButtons();setStatus(paused?'Recording paused':'Recording resumed')};
 $('addPointBtn').onclick=addAveragedPoint;
@@ -89,6 +163,7 @@ $('importInput').onchange=async e=>{try{const data=JSON.parse(await e.target.fil
 $('zoneName').oninput=updateMetrics;
 map.on('click',e=>{if(drawingAvoid){currentAvoid.push(e.latlng);renderAvoid();updateButtons();return}if(addVertexMode){boundary.push(e.latlng);smooth=[];renderBoundary();return}if(removeVertexMode&&boundary.length){let best=0,bd=Infinity;boundary.forEach((p,i)=>{const d=dist(p,e.latlng);if(d<bd){bd=d;best=i}});if(bd<15){boundary.splice(best,1);smooth=[];renderBoundary()}return}if(walking&&!paused){boundary.push(e.latlng);smooth=[];renderBoundary()}});
 
+map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('resumeFollowBtn').classList.remove('hidden')}});
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-refreshSelectors();renderAll();save();
+state.version=6;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
