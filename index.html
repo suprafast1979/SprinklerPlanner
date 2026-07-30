@@ -7,62 +7,85 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="styles.css?v=4">
+  <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
-<header><div><h1>Sprinkler Planner</h1><p id="status">Ready</p></div><button id="locateBtn" class="secondary">Locate me</button></header>
+<header>
+  <div><h1>Sprinkler Planner</h1><p id="status">Ready</p></div>
+  <button id="locateBtn" class="secondary">Locate me</button>
+</header>
 <main>
   <div id="map" aria-label="Property map"></div>
   <section class="panel">
     <div class="tabs">
-      <button class="tab active" data-tab="zone">1. Zone</button>
-      <button class="tab" data-tab="avoid">2. No-spray</button>
-      <button class="tab" data-tab="layout">3. Layout</button>
-      <button class="tab" data-tab="saved">4. Saved</button>
+      <button class="tab active" data-tab="projects">Projects</button>
+      <button class="tab" data-tab="zone">Zone</button>
+      <button class="tab" data-tab="avoid">No-spray</button>
+      <button class="tab" data-tab="inventory">Inventory</button>
+      <button class="tab" data-tab="layout">Layout</button>
     </div>
 
-    <div id="zoneTab" class="tabbody active">
-      <label>Zone name<input id="zoneName" type="text" value="Back yard"></label>
+    <div id="projectsTab" class="tabbody active">
+      <div class="row">
+        <label>Project<select id="projectSelect"></select></label>
+        <label>Project name<input id="projectName" value="Home"></label>
+      </div>
+      <div class="row"><button id="newProjectBtn">New project</button><button id="saveProjectBtn" class="secondary">Save project</button></div>
+      <div class="row"><button id="renameProjectBtn" class="secondary">Rename</button><button id="deleteProjectBtn" class="danger">Delete project</button></div>
+      <hr>
+      <div class="row">
+        <label>Zone<select id="zoneSelect"></select></label>
+        <label>Zone name<input id="zoneName" value="Back yard"></label>
+      </div>
+      <div class="row"><button id="newZoneBtn">New zone</button><button id="saveZoneBtn" class="secondary">Save zone</button></div>
+      <div class="row"><button id="loadZoneBtn" class="secondary">Load zone</button><button id="deleteZoneBtn" class="danger">Delete zone</button></div>
+      <div class="row"><button id="exportBtn" class="secondary">Export project</button><label class="fileLabel">Import project<input id="importInput" type="file" accept=".json,application/json"></label></div>
+      <p class="help">Projects contain separate saved irrigation zones such as a yard, pasture, orchard, or paddock.</p>
+    </div>
+
+    <div id="zoneTab" class="tabbody">
       <div class="row"><button id="startWalkBtn">Start walking perimeter</button><button id="pauseWalkBtn" class="secondary" disabled>Pause</button></div>
-      <div class="row"><button id="addPointBtn" class="secondary">Add GPS point</button><button id="finishWalkBtn" class="secondary" disabled>Finish boundary</button></div>
-      <div class="row"><button id="smoothBtn" class="secondary">Smooth boundary</button><button id="editBtn" class="secondary">Edit points</button></div>
+      <div class="row"><button id="addPointBtn" class="secondary">Add averaged GPS point</button><button id="finishWalkBtn" class="secondary" disabled>Finish boundary</button></div>
+      <div class="row"><button id="smoothBtn" class="secondary">Smooth display</button><button id="editBtn" class="secondary">Edit points</button></div>
+      <div class="row"><button id="addVertexBtn" class="secondary">Add point by tapping</button><button id="removeVertexBtn" class="secondary">Remove point by tapping</button></div>
       <div class="row one"><button id="clearBoundaryBtn" class="danger">Clear current zone</button></div>
-      <p class="help">Walk or tap the map. Smoothing rounds the displayed boundary while retaining the original recorded points.</p>
-      <div class="metrics"><div><span>GPS accuracy</span><strong id="accuracy">—</strong></div><div><span>Boundary points</span><strong id="pointCount">0</strong></div><div><span>Area</span><strong id="areaValue">—</strong></div></div>
+      <label>Maximum accepted GPS accuracy
+        <select id="accuracyLimit"><option value="3">10 ft</option><option value="5" selected>16 ft</option><option value="8">26 ft</option><option value="12">39 ft</option></select>
+      </label>
+      <p class="help">The recorder rejects poor fixes, averages recent readings, ignores jumps, and only adds a point after meaningful movement.</p>
+      <div class="metrics"><div><span>GPS accuracy</span><strong id="accuracy">—</strong></div><div><span>Recorded points</span><strong id="pointCount">0</strong></div><div><span>Area</span><strong id="areaValue">—</strong></div></div>
     </div>
 
     <div id="avoidTab" class="tabbody">
-      <label>No-spray area name<input id="avoidName" type="text" value="House"></label>
+      <label>No-spray area name<input id="avoidName" value="House"></label>
       <div class="row"><button id="drawAvoidBtn">Draw no-spray area</button><button id="finishAvoidBtn" class="secondary" disabled>Finish area</button></div>
       <div class="row"><button id="deleteAvoidBtn" class="danger">Delete last area</button><button id="clearAvoidBtn" class="danger">Clear all</button></div>
-      <p class="help">Tap around the house, driveway, barn, patio, or any place water must not land. The layout engine will keep sprinkler centers and coverage away from these areas.</p>
-      <div class="metrics"><div><span>No-spray areas</span><strong id="avoidCount">0</strong></div><div><span>Drawing</span><strong id="avoidDrawing">No</strong></div><div><span>Selected zone</span><strong id="activeZoneLabel">—</strong></div></div>
+      <p class="help">Tap around buildings, pavement, gardens, or any area where water must not land.</p>
+      <div class="metrics"><div><span>No-spray areas</span><strong id="avoidCount">0</strong></div><div><span>Drawing</span><strong id="avoidDrawing">No</strong></div><div><span>Active zone</span><strong id="activeZoneLabel">—</strong></div></div>
+    </div>
+
+    <div id="inventoryTab" class="tabbody">
+      <div class="row"><label>Sprinkler name<input id="invName" value="Generic impact"></label><label>Quantity<input id="invQty" type="number" min="1" value="1"></label></div>
+      <label>Coverage pattern<select id="invPattern"><option value="circle">Full circle</option><option value="sector">Adjustable sweep</option><option value="rectangle">Oscillating rectangle</option></select></label>
+      <div id="invRound"><label>Throw radius (ft)<input id="invRadius" type="number" min="5" value="35"></label></div>
+      <div id="invSector" class="hidden"><label>Maximum sweep<select id="invAngle"><option>90</option><option selected>180</option><option>270</option><option>360</option></select></label></div>
+      <div id="invRect" class="hidden"><div class="row"><label>Length (ft)<input id="invLength" type="number" min="5" value="50"></label><label>Width (ft)<input id="invWidth" type="number" min="5" value="30"></label></div></div>
+      <div class="row"><button id="addInventoryBtn">Add to inventory</button><button id="clearInventoryBtn" class="danger">Clear inventory</button></div>
+      <div id="inventoryList" class="list"></div>
     </div>
 
     <div id="layoutTab" class="tabbody">
-      <label>Sprinkler pattern<select id="pattern"><option value="circle">Full-circle / impact</option><option value="sector">Adjustable arc / sweep</option><option value="rectangle">Oscillating rectangle</option></select></label>
-      <div id="roundControls">
-        <label>Throw radius in feet<input id="spraySize" type="number" min="5" max="300" step="1" value="35"></label>
-      </div>
-      <div id="sectorControls" class="hidden"><label>Maximum sweep angle<select id="sectorAngle"><option value="90">90°</option><option value="180" selected>180°</option><option value="270">270°</option></select></label></div>
-      <div id="rectangleControls" class="hidden"><div class="row"><label>Length (ft)<input id="rectLength" type="number" min="5" value="50"></label><label>Width (ft)<input id="rectWidth" type="number" min="5" value="30"></label></div></div>
-      <label>Layout priority<select id="priority"><option value="fewest">Fewest sprinklers</option><option value="balanced" selected>Balanced</option><option value="coverage">Best coverage</option></select></label>
+      <label>Use sprinkler<select id="layoutSprinklerSelect"></select></label>
+      <label>Optimization mode<select id="priority"><option value="water">Water conservation</option><option value="balanced" selected>Balanced</option><option value="coverage">Maximum coverage</option></select></label>
+      <label class="check"><input id="inventoryOnly" type="checkbox" checked> Use only the quantity I own</label>
       <div class="row"><button id="generateBtn">Optimize layout</button><button id="clearSprinklersBtn" class="danger">Clear layout</button></div>
-      <p class="help">The app automatically places, rotates, and numbers sprinklers based on the active zone and no-spray areas.</p>
-      <div class="metrics"><div><span>Sprinklers</span><strong id="sprinklerCount">0</strong></div><div><span>Pattern</span><strong id="patternValue">Circle</strong></div><div><span>Estimated coverage</span><strong id="coverageValue">—</strong></div></div>
-    </div>
-
-    <div id="savedTab" class="tabbody">
-      <label>Property / project name<input id="projectName" type="text" value="Dad's property"></label>
-      <div class="row"><button id="saveZoneBtn">Save current zone</button><button id="newZoneBtn" class="secondary">New zone</button></div>
-      <label>Saved zones<select id="zoneSelect"><option value="">No saved zones</option></select></label>
-      <div class="row"><button id="loadZoneBtn" class="secondary">Load zone</button><button id="deleteZoneBtn" class="danger">Delete zone</button></div>
-      <div class="row"><button id="exportBtn" class="secondary">Export project</button><label class="fileLabel">Import project<input id="importInput" type="file" accept=".json,application/json"></label></div>
-      <p class="help">A property can contain separate saved zones such as a yard, pasture, orchard, or paddock. Each zone retains its no-spray areas and sprinkler layout.</p>
+      <p class="help">Coverage is sampled across the actual zone and excludes no-spray areas. It no longer estimates coverage by simply adding sprinkler-circle areas.</p>
+      <div class="metrics"><div><span>Sprinklers</span><strong id="sprinklerCount">0</strong></div><div><span>True coverage</span><strong id="coverageValue">—</strong></div><div><span>Uncovered</span><strong id="uncoveredValue">—</strong></div></div>
+      <div class="metrics"><div><span>Overspray</span><strong id="oversprayValue">—</strong></div><div><span>Overlap score</span><strong id="overlapValue">—</strong></div><div><span>Recommendation</span><strong id="recommendValue">—</strong></div></div>
     </div>
   </section>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
