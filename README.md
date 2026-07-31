@@ -1,10 +1,13 @@
-# Sprinkler Planner v6
+# Sprinkler Planner – Stability Update (v7)
 
-This release separates the application into two working modes:
+## Files to replace
+- app.js
+- index.html
 
-- **Plan** — create projects and zones, record boundaries, define no-spray areas, manage inventory, and optimize layouts.
-- **Set Up** — select the nearest saved layout and walk through each sprinkler position using live GPS distance and direction guidance.
+## What improved
+1. Stricter GPS recording – fewer wild jumps and big straight-line gaps
+2. Auto-pause + vibration when accuracy stays poor so you know to stop walking
+3. Numbered markers on every boundary point while recording or editing
+4. Clearer project labels
 
-The application now requests GPS on startup, centers on the user's location, provides a persistent locate button, and supports follow mode during field setup.
-
-For GitHub Pages, replace the repository files with the contents of this package and commit the changes. A hard refresh may be needed after deployment because the application uses a service worker.
+After uploading, hard-refresh or clear site data on the phone once.

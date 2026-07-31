@@ -16,24 +16,57 @@ function area(points){if(points.length<3)return 0;const o=points[0],q=points.map
 function chaikin(points,it=2){if(points.length<3)return points.slice();let out=points.slice();for(let k=0;k<it;k++){const n=[];for(let i=0;i<out.length;i++){const a=out[i],b=out[(i+1)%out.length];n.push({lat:.75*a.lat+.25*b.lat,lng:.75*a.lng+.25*b.lng},{lat:.25*a.lat+.75*b.lat,lng:.25*a.lng+.75*b.lng})}out=n}return out}
 function centroid(points){const o=points[0],q=points.map(p=>localXY(p,o));return ll({x:q.reduce((s,p)=>s+p.x,0)/q.length,y:q.reduce((s,p)=>s+p.y,0)/q.length},o)}
 
-let state={version:6,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
+let state={version:7,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
 let boundary=[],smooth=[],noSpray=[],sprinklers=[],currentAvoid=[];
 let walking=false,paused=false,drawingAvoid=false,editMode=false,addVertexMode=false,removeVertexMode=false;
 let watchId=null,currentPosition=null,gpsSamples=[];
+let poorFixStart=null; // timestamp when accuracy first went bad while walking
 let userMarker,accuracyCircle,boundaryLine,boundaryPoly,currentAvoidLine;
 let avoidLayers=[],vertexMarkers=[],sprinklerLayers=[];
 
-function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:6,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
+function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:7,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
 function save(){localStorage.setItem(STORE,JSON.stringify(state))}
 function activeProject(){return state.projects.find(p=>p.id===state.activeProjectId)}
 function activeZone(){return activeProject()?.zones.find(z=>z.id===state.activeZoneId)}
 function zoneObject(){return{id:state.activeZoneId||uid(),name:$('zoneName').value.trim()||'Unnamed zone',boundary,smooth,noSpray,sprinklers:sprinklers.map(s=>({...s,layer:undefined})),updated:new Date().toISOString()}}
-function loadZone(z){state.activeZoneId=z.id;boundary=(z.boundary||[]).map(p=>({...p}));smooth=(z.smooth||[]).map(p=>({...p}));noSpray=(z.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(z.sprinklers||[]).map(s=>({...s}));$('zoneName').value=z.name;walking=paused=drawingAvoid=editMode=addVertexMode=removeVertexMode=false;renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});refreshSelectors();setStatus(`Loaded ${z.name}`)}
-function resetZone(){state.activeZoneId=null;boundary=[];smooth=[];noSpray=[];sprinklers=[];currentAvoid=[];$('zoneName').value='New zone';renderAll();refreshSelectors();setStatus('New blank zone')}
+function loadZone(z){state.activeZoneId=z.id;boundary=(z.boundary||[]).map(p=>({...p}));smooth=(z.smooth||[]).map(p=>({...p}));noSpray=(z.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(z.sprinklers||[]).map(s=>({...s}));$('zoneName').value=z.name;walking=paused=drawingAvoid=editMode=addVertexMode=removeVertexMode=false;poorFixStart=null;renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});refreshSelectors();setStatus(`Loaded ${z.name}`)}
+function resetZone(){state.activeZoneId=null;boundary=[];smooth=[];noSpray=[];sprinklers=[];currentAvoid=[];$('zoneName').value='New zone';walking=paused=false;poorFixStart=null;renderAll();refreshSelectors();setStatus('New blank zone')}
 
 function displayBoundary(){return smooth.length?smooth:boundary}
 function removeLayer(x){if(x&&map.hasLayer(x))map.removeLayer(x)}
-function renderBoundary(){removeLayer(boundaryLine);removeLayer(boundaryPoly);vertexMarkers.forEach(removeLayer);vertexMarkers=[];const shown=displayBoundary();if(shown.length>=2)boundaryLine=L.polyline(shown,{color:'#176b3a',weight:4}).addTo(map);if(shown.length>=3&&!walking)boundaryPoly=L.polygon(shown,{color:'#176b3a',weight:3,fillColor:'#4fae70',fillOpacity:.18}).addTo(map);if(editMode)boundary.forEach((p,i)=>{const m=L.marker(p,{draggable:true,icon:L.divIcon({className:'',html:'<div class="vertex-icon"></div>',iconSize:[16,16],iconAnchor:[8,8]})}).addTo(map);m.on('drag',e=>{boundary[i]=e.target.getLatLng();smooth=[];renderBoundary();updateMetrics()});vertexMarkers.push(m)});updateMetrics()}
+function renderBoundary(){
+  removeLayer(boundaryLine);removeLayer(boundaryPoly);
+  vertexMarkers.forEach(removeLayer);vertexMarkers=[];
+  const shown=displayBoundary();
+  if(shown.length>=2)boundaryLine=L.polyline(shown,{color:'#176b3a',weight:4}).addTo(map);
+  if(shown.length>=3&&!walking)boundaryPoly=L.polygon(shown,{color:'#176b3a',weight:3,fillColor:'#4fae70',fillOpacity:.18}).addTo(map);
+
+  // Always show numbered points while recording or editing so gaps are obvious
+  const showVertices = walking || editMode || addVertexMode || removeVertexMode;
+  if(showVertices){
+    boundary.forEach((p,i)=>{
+      const m=L.marker(p,{
+        draggable:editMode,
+        icon:L.divIcon({
+          className:'',
+          html:`<div class="vertex-num">${i+1}</div>`,
+          iconSize:[22,22],
+          iconAnchor:[11,11]
+        })
+      }).addTo(map);
+      if(editMode){
+        m.on('drag',e=>{
+          boundary[i]=e.target.getLatLng();
+          smooth=[];
+          renderBoundary();
+          updateMetrics();
+        });
+      }
+      vertexMarkers.push(m);
+    });
+  }
+  updateMetrics();
+}
 function renderAvoid(){avoidLayers.forEach(removeLayer);avoidLayers=[];noSpray.forEach(a=>avoidLayers.push(L.polygon(a.points,{color:'#b33838',fillColor:'#d74b4b',fillOpacity:.32,weight:3}).bindTooltip(a.name).addTo(map)));removeLayer(currentAvoidLine);if(currentAvoid.length)currentAvoidLine=L.polyline(currentAvoid,{color:'#d54b4b',dashArray:'6,6',weight:3}).addTo(map);$('avoidCount').textContent=noSpray.length;$('avoidDrawing').textContent=drawingAvoid?'Yes':'No'}
 function coverageLayer(s,i){const pos=s.position,label=`<div>${i+1}</div>`;if(s.pattern==='rectangle'){const o=pos,halfW=s.width/2,halfL=s.length/2,pts=[ll({x:-halfW,y:-halfL},o),ll({x:halfW,y:-halfL},o),ll({x:halfW,y:halfL},o),ll({x:-halfW,y:halfL},o)];const poly=L.polygon(pts,{color:'#1976c8',fillOpacity:.14,weight:2}).addTo(map);return [poly,L.marker(pos,{icon:L.divIcon({className:'sprinkler-label',html:label,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(map)]}
 const circle=L.circle(pos,{radius:s.radius,color:'#1976c8',fillOpacity:.12,weight:2}).addTo(map);return[circle,L.marker(pos,{icon:L.divIcon({className:'sprinkler-label',html:label,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(map)]}
@@ -45,6 +78,12 @@ function updateMetrics(){$('pointCount').textContent=boundary.length;const a=are
 function refreshSelectors(){const ps=$('projectSelect');ps.innerHTML=state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');ps.value=state.activeProjectId||'';const p=activeProject();$('projectName').value=p?.name||'';const zs=$('zoneSelect');zs.innerHTML=p?.zones.length?p.zones.map(z=>`<option value="${z.id}">${z.name}</option>`).join(''):'<option value="">No saved zones</option>';if(state.activeZoneId)zs.value=state.activeZoneId;renderInventory();refreshLayoutChoices()}
 function renderInventory(){const box=$('inventoryList');box.innerHTML=state.inventory.length?'':'<p class="help">No sprinklers saved.</p>';state.inventory.forEach(item=>{const d=document.createElement('div');d.className='list-item';const desc=item.pattern==='rectangle'?`${item.length} × ${item.width} ft rectangle`:`${item.radius} ft radius${item.pattern==='sector'?`, ${item.angle}° max`:''}`;d.innerHTML=`<div><strong>${item.name} ×${item.qty}</strong><small>${desc}</small></div><button class="danger" data-id="${item.id}">Delete</button>`;d.querySelector('button').onclick=()=>{state.inventory=state.inventory.filter(x=>x.id!==item.id);save();refreshSelectors()};box.appendChild(d)})}
 function refreshLayoutChoices(){const s=$('layoutSprinklerSelect');s.innerHTML=state.inventory.length?state.inventory.map(x=>`<option value="${x.id}">${x.name} ×${x.qty}</option>`).join(''):'<option value="">Add a sprinkler first</option>'}
+
+function vibrateAlert(){
+  if(navigator.vibrate){
+    navigator.vibrate([200,100,200,100,400]); // distinct pattern
+  }
+}
 
 function startGPS(center=false){
   if(!navigator.geolocation)return setStatus('Geolocation unavailable');
@@ -61,16 +100,98 @@ function handleGPS(pos){
   const accFt=Math.round(mToFt(p.accuracy));
   $('accuracy').textContent=`±${accFt} ft`;
   $('accuracy').style.color=accFt<=12?'#1b9b50':accFt<=25?'#c98a00':'#a93636';
+
   if(!userMarker){userMarker=L.circleMarker(p,{radius:7,color:'#fff',weight:2,fillColor:'#1b9b50',fillOpacity:1}).addTo(map);accuracyCircle=L.circle(p,{radius:p.accuracy,color:'#1b9b50',weight:1,fillOpacity:.08}).addTo(map)}else{userMarker.setLatLng(p);accuracyCircle.setLatLng(p).setRadius(p.accuracy)}
+
   if(centerOnNextFix){centerMapOnUser();selectNearestDeployZone();setStatus('Location found')}
   else if(followUser&&currentMode==='deploy')map.panTo(p,{animate:true,duration:.35});
-  gpsSamples.push(p);gpsSamples=gpsSamples.filter(x=>p.t-x.t<10000).slice(-12);
-  if(walking&&!paused)maybeRecordGPS(p);
+
+  gpsSamples.push(p);
+  gpsSamples=gpsSamples.filter(x=>p.t-x.t<12000).slice(-15);
+
+  // Auto-pause logic while walking
+  const limit=Number($('accuracyLimit').value);
+  if(walking && !paused){
+    if(p.accuracy > limit){
+      if(!poorFixStart) poorFixStart = p.t;
+      // If poor accuracy has lasted > 3.5 seconds → pause + alert
+      if(p.t - poorFixStart > 3500){
+        paused = true;
+        updateButtons();
+        vibrateAlert();
+        const last = boundary.at(-1);
+        if(last){
+          map.panTo(last, {animate:true, duration:0.6});
+          const feet = Math.round(mToFt(dist(p, last)));
+          const dir = compassDirection(p, last);
+          setStatus(`GPS weak — STOP. Walk ${dir} ${feet} ft back to point ${boundary.length}. Wait for green accuracy, then Resume.`);
+        } else {
+          setStatus('GPS weak — STOP walking. Wait for green accuracy, then Resume.');
+        }
+        poorFixStart = null;
+      }
+    } else {
+      poorFixStart = null; // good fix resets the timer
+      if(walking && !paused) maybeRecordGPS(p);
+    }
+  } else if(walking && paused){
+    // Live guidance back to the last good point while paused
+    const last = boundary.at(-1);
+    if(last && currentPosition){
+      const feet = Math.round(mToFt(dist(currentPosition, last)));
+      const dir = compassDirection(currentPosition, last);
+      const accFt = Math.round(mToFt(currentPosition.accuracy));
+      if(feet <= 8 && accFt <= limit * 3.28084){ // roughly within 8 ft and acceptable accuracy
+        setStatus(`Back at point ${boundary.length}. Accuracy ±${accFt} ft — tap Resume when ready.`);
+      } else if(feet <= 8){
+        setStatus(`Near point ${boundary.length}. Hold still for better accuracy (±${accFt} ft), then Resume.`);
+      } else {
+        setStatus(`Walk ${dir} ${feet} ft back to point ${boundary.length}. (Accuracy ±${accFt} ft)`);
+      }
+    }
+  } else {
+    if(walking && !paused) maybeRecordGPS(p);
+  }
+
   updateDeployGuidance();
 }
-function averagedFix(){const limit=Number($('accuracyLimit').value),good=gpsSamples.filter(p=>p.accuracy<=limit);if(good.length<2)return null;let w=0,lat=0,lng=0;good.forEach(p=>{const q=1/Math.max(1,p.accuracy*p.accuracy);w+=q;lat+=p.lat*q;lng+=p.lng*q});return{lat:lat/w,lng:lng/w,accuracy:Math.min(...good.map(p=>p.accuracy))}}
-function maybeRecordGPS(p){const limit=Number($('accuracyLimit').value);if(p.accuracy>limit)return;const q=averagedFix();if(!q)return;const last=boundary.at(-1);if(last){const d=dist(last,q);if(d<2.5)return;if(d>18&&p.accuracy>5)return}boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus(`Recording perimeter • ${boundary.length} points`)}
-function addAveragedPoint(){startGPS(false);const q=averagedFix();if(!q)return setStatus('Waiting for an accurate GPS fix');boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus('Averaged GPS point added')}
+function averagedFix(){
+  const limit=Number($('accuracyLimit').value);
+  const good=gpsSamples.filter(p=>p.accuracy<=limit);
+  if(good.length < 3) return null; // require 3 solid samples
+  let w=0,lat=0,lng=0;
+  good.forEach(p=>{
+    const q=1/Math.max(1,p.accuracy*p.accuracy);
+    w+=q; lat+=p.lat*q; lng+=p.lng*q;
+  });
+  return {lat:lat/w, lng:lng/w, accuracy:Math.min(...good.map(p=>p.accuracy))};
+}
+function maybeRecordGPS(p){
+  const limit=Number($('accuracyLimit').value);
+  if(p.accuracy > limit) return;
+  const q=averagedFix();
+  if(!q) return;
+  const last=boundary.at(-1);
+  if(last){
+    const d=dist(last,q);
+    // Require meaningful but not crazy movement
+    if(d < 2.8) return;          // too close – ignore
+    if(d > 14 && p.accuracy > 4) return; // big jump with only mediocre accuracy – reject
+  }
+  boundary.push({lat:q.lat,lng:q.lng});
+  smooth=[];
+  renderBoundary();
+  setStatus(`Recording • ${boundary.length} points`);
+}
+function addAveragedPoint(){
+  startGPS(false);
+  const q=averagedFix();
+  if(!q) return setStatus('Waiting for a solid GPS fix (need 3 good readings)');
+  boundary.push({lat:q.lat,lng:q.lng});
+  smooth=[];
+  renderBoundary();
+  setStatus('Averaged GPS point added');
+}
 
 function pointCovered(q,s){const p=localXY(q,s.position);if(s.pattern==='rectangle')return Math.abs(p.x)<=s.width/2&&Math.abs(p.y)<=s.length/2;return Math.hypot(p.x,p.y)<=s.radius}
 function sampleCoverage(){const zone=displayBoundary();if(zone.length<3||!sprinklers.length)return null;const o=zone[0],poly=zone.map(p=>localXY(p,o)),avoids=noSpray.map(a=>a.points.map(p=>localXY(p,o)));const xs=poly.map(p=>p.x),ys=poly.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);const step=Math.max(0.8,Math.min(2.2,Math.sqrt(area(zone))/120));let eligible=0,covered=0,multi=0,overspray=0,outside=0;for(let y=minY-step*2;y<=maxY+step*2;y+=step)for(let x=minX-step*2;x<=maxX+step*2;x+=step){const inside=pip({x,y},poly)&&!avoids.some(a=>pip({x,y},a));const q=ll({x,y},o);const count=sprinklers.reduce((n,s)=>n+(pointCovered(q,s)?1:0),0);if(inside){eligible++;if(count){covered++;if(count>1)multi++}}else if(count){outside++;overspray++}}return{coverage:eligible?covered/eligible*100:0,uncoveredSqFt:(eligible-covered)*step*step*10.7639,overlap:covered?multi/covered*100:0,overspray:outside?overspray/(outside+eligible)*100:0}}
@@ -147,14 +268,14 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelect
 $('plannerModeBtn').onclick=()=>setMode('planner');$('deployModeBtn').onclick=()=>setMode('deploy');$('startDeployBtn').onclick=()=>beginDeployment(false);$('resumeDeployBtn').onclick=()=>beginDeployment(true);$('placedBtn').onclick=()=>nextDeploy(true);$('skipBtn').onclick=()=>nextDeploy(false);$('previousBtn').onclick=()=>{deployIndex=Math.max(0,deployIndex-1);lastSpokenDistance=null;showDeployTarget()};$('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};$('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
 $('floatingLocateBtn').onclick=()=>startGPS(true);
 $('resumeFollowBtn').onclick=()=>startGPS(true);
-$('startWalkBtn').onclick=()=>{startGPS(true);walking=true;paused=false;boundary=[];smooth=[];sprinklers=[];renderAll();setStatus('Recording perimeter')};
-$('pauseWalkBtn').onclick=()=>{paused=!paused;updateButtons();setStatus(paused?'Recording paused':'Recording resumed')};
+$('startWalkBtn').onclick=()=>{startGPS(true);walking=true;paused=false;poorFixStart=null;boundary=[];smooth=[];sprinklers=[];renderAll();setStatus('Recording perimeter — walk slowly, keep phone skyward')};
+$('pauseWalkBtn').onclick=()=>{paused=!paused;poorFixStart=null;updateButtons();setStatus(paused?'Recording paused':'Recording resumed')};
 $('addPointBtn').onclick=addAveragedPoint;
-$('finishWalkBtn').onclick=()=>{walking=false;paused=false;smooth=chaikin(boundary,2);renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});setStatus('Boundary finished')};
+$('finishWalkBtn').onclick=()=>{walking=false;paused=false;poorFixStart=null;smooth=chaikin(boundary,2);renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});setStatus('Boundary finished')};
 $('smoothBtn').onclick=()=>{if(boundary.length<3)return setStatus('Add at least 3 points');smooth=chaikin(boundary,2);renderBoundary();setStatus('Boundary display smoothed')};
-$('editBtn').onclick=()=>{editMode=!editMode;addVertexMode=removeVertexMode=false;renderBoundary();updateButtons();setStatus(editMode?'Drag boundary handles':'Editing finished')};
+$('editBtn').onclick=()=>{editMode=!editMode;addVertexMode=removeVertexMode=false;renderBoundary();updateButtons();setStatus(editMode?'Drag numbered points to adjust':'Editing finished')};
 $('addVertexBtn').onclick=()=>{addVertexMode=!addVertexMode;removeVertexMode=editMode=false;renderBoundary();setStatus(addVertexMode?'Tap the map to add boundary points':'Add-point mode off')};
-$('removeVertexBtn').onclick=()=>{removeVertexMode=!removeVertexMode;addVertexMode=editMode=false;renderBoundary();setStatus(removeVertexMode?'Tap near a boundary point to remove it':'Remove-point mode off')};
+$('removeVertexBtn').onclick=()=>{removeVertexMode=!removeVertexMode;addVertexMode=editMode=false;renderBoundary();setStatus(removeVertexMode?'Tap near a numbered point to remove it':'Remove-point mode off')};
 $('clearBoundaryBtn').onclick=resetZone;
 $('drawAvoidBtn').onclick=()=>{drawingAvoid=true;currentAvoid=[];walking=false;renderAvoid();updateButtons();setStatus('Tap around the no-spray area')};
 $('finishAvoidBtn').onclick=()=>{if(currentAvoid.length<3)return;noSpray.push({name:$('avoidName').value.trim()||`No-spray ${noSpray.length+1}`,points:[...currentAvoid]});currentAvoid=[];drawingAvoid=false;renderAvoid();updateCoverage();updateButtons();setStatus('No-spray area saved')};
@@ -178,5 +299,5 @@ map.on('click',e=>{if(drawingAvoid){currentAvoid.push(e.latlng);renderAvoid();up
 
 map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('resumeFollowBtn').classList.remove('hidden')}});
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=6;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=7;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
