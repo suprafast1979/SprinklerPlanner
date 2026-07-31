@@ -4,6 +4,17 @@ const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{m
 const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,attribution:'Tiles &copy; Esri'}).addTo(map);
 L.control.layers({Satellite:imagery,Streets:street}).addTo(map);
 
+// ============================================================
+// CLOUD CONFIG – paste your Supabase values here
+// Leave blank to stay fully offline / localStorage only
+// ============================================================
+const SUPABASE_URL = '';          // e.g. 'https://abcdefgh.supabase.co'
+const SUPABASE_ANON_KEY = '';     // the "anon" "public" key
+
+let supabaseClient = null;
+let currentUser = null;
+let cloudEnabled = false;
+
 const STORE='sprinklerPlannerV5';
 let followUser=true,centerOnNextFix=true,userMovedMap=false,currentMode='planner',deployIndex=0,deployed=new Set(),deployZone=null,lastSpokenDistance=null;
 const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
@@ -16,7 +27,7 @@ function area(points){if(points.length<3)return 0;const o=points[0],q=points.map
 function chaikin(points,it=2){if(points.length<3)return points.slice();let out=points.slice();for(let k=0;k<it;k++){const n=[];for(let i=0;i<out.length;i++){const a=out[i],b=out[(i+1)%out.length];n.push({lat:.75*a.lat+.25*b.lat,lng:.75*a.lng+.25*b.lng},{lat:.25*a.lat+.75*b.lat,lng:.25*a.lng+.75*b.lng})}out=n}return out}
 function centroid(points){const o=points[0],q=points.map(p=>localXY(p,o));return ll({x:q.reduce((s,p)=>s+p.x,0)/q.length,y:q.reduce((s,p)=>s+p.y,0)/q.length},o)}
 
-let state={version:7,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
+let state={version:8,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
 let boundary=[],smooth=[],noSpray=[],sprinklers=[],currentAvoid=[];
 let walking=false,paused=false,drawingAvoid=false,editMode=false,addVertexMode=false,removeVertexMode=false;
 let watchId=null,currentPosition=null,gpsSamples=[];
@@ -24,8 +35,156 @@ let poorFixStart=null; // timestamp when accuracy first went bad while walking
 let userMarker,accuracyCircle,boundaryLine,boundaryPoly,currentAvoidLine;
 let avoidLayers=[],vertexMarkers=[],sprinklerLayers=[];
 
-function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:7,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
-function save(){localStorage.setItem(STORE,JSON.stringify(state))}
+function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:8,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
+
+// ---------- Cloud / Auth helpers ----------
+function initCloud(){
+  if(!SUPABASE_URL || !SUPABASE_ANON_KEY || typeof supabase === 'undefined'){
+    cloudEnabled = false;
+    updateAuthUI();
+    return;
+  }
+  try{
+    supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    cloudEnabled = true;
+    supabaseClient.auth.getSession().then(({data})=>{
+      currentUser = data.session?.user || null;
+      updateAuthUI();
+      if(currentUser) loadProjectsFromCloud();
+    });
+    supabaseClient.auth.onAuthStateChange((event, session)=>{
+      currentUser = session?.user || null;
+      updateAuthUI();
+      if(event === 'SIGNED_IN' && currentUser){
+        setStatus('Signed in – loading your projects…');
+        loadProjectsFromCloud();
+      }
+      if(event === 'SIGNED_OUT'){
+        setStatus('Signed out – using local projects');
+      }
+    });
+  }catch(e){
+    console.warn('Supabase init failed', e);
+    cloudEnabled = false;
+    updateAuthUI();
+  }
+}
+
+function updateAuthUI(){
+  const btn = $('authBtn');
+  const label = $('authLabel');
+  if(!btn) return;
+  if(!cloudEnabled){
+    btn.classList.add('hidden');
+    if(label) label.textContent = '';
+    return;
+  }
+  btn.classList.remove('hidden');
+  if(currentUser){
+    btn.textContent = 'Sign out';
+    if(label) label.textContent = currentUser.email || 'Signed in';
+  } else {
+    btn.textContent = 'Sign in';
+    if(label) label.textContent = 'Local mode';
+  }
+}
+
+async function signIn(){
+  if(!supabaseClient) return;
+  // Prefer magic link (email). Google can be enabled in Supabase dashboard.
+  const email = prompt('Enter your email for a sign-in link:');
+  if(!email) return;
+  const {error} = await supabaseClient.auth.signInWithOtp({
+    email: email.trim(),
+    options: { emailRedirectTo: window.location.origin + window.location.pathname }
+  });
+  if(error) setStatus('Sign-in error: ' + error.message);
+  else setStatus('Check your email for the sign-in link');
+}
+
+async function signOut(){
+  if(!supabaseClient) return;
+  await supabaseClient.auth.signOut();
+  currentUser = null;
+  updateAuthUI();
+}
+
+async function loadProjectsFromCloud(){
+  if(!supabaseClient || !currentUser) return;
+  try{
+    const {data, error} = await supabaseClient
+      .from('projects')
+      .select('id, name, data, updated_at')
+      .order('updated_at', {ascending:false});
+    if(error) throw error;
+    if(data && data.length){
+      // Convert cloud rows into the local state shape
+      state.projects = data.map(row => ({
+        id: row.id,
+        name: row.name,
+        zones: (row.data && row.data.zones) ? row.data.zones : [],
+        // keep any extra fields that were stored
+        ...(row.data || {})
+      }));
+      // Ensure activeProjectId is valid
+      if(!state.projects.find(p => p.id === state.activeProjectId)){
+        state.activeProjectId = state.projects[0]?.id || null;
+      }
+      // Inventory is stored per-user in the first project or separately – for simplicity keep local inventory
+      localStorage.setItem(STORE, JSON.stringify(state));
+      refreshSelectors();
+      setStatus(`Loaded ${data.length} project(s) from cloud`);
+    } else {
+      // First login – push current local projects up
+      await syncAllProjectsToCloud();
+      setStatus('No cloud projects yet – uploaded your local ones');
+    }
+  }catch(e){
+    console.error(e);
+    setStatus('Could not load cloud projects – using local copy');
+  }
+}
+
+async function syncProjectToCloud(project){
+  if(!supabaseClient || !currentUser || !project) return;
+  try{
+    const payload = {
+      id: project.id,
+      owner_id: currentUser.id,
+      name: project.name || 'Untitled',
+      data: {
+        zones: project.zones || [],
+        // store anything else useful
+        inventory: state.inventory
+      },
+      updated_at: new Date().toISOString()
+    };
+    const {error} = await supabaseClient
+      .from('projects')
+      .upsert(payload, {onConflict: 'id'});
+    if(error) throw error;
+  }catch(e){
+    console.warn('Cloud sync failed', e);
+  }
+}
+
+async function syncAllProjectsToCloud(){
+  if(!currentUser) return;
+  for(const p of state.projects){
+    await syncProjectToCloud(p);
+  }
+}
+
+function save(){
+  // Always write localStorage so offline still works
+  localStorage.setItem(STORE, JSON.stringify(state));
+  // If signed in, also push the active project to the cloud
+  if(cloudEnabled && currentUser){
+    const p = activeProject();
+    if(p) syncProjectToCloud(p);
+  }
+}
+
 function activeProject(){return state.projects.find(p=>p.id===state.activeProjectId)}
 function activeZone(){return activeProject()?.zones.find(z=>z.id===state.activeZoneId)}
 function zoneObject(){return{id:state.activeZoneId||uid(),name:$('zoneName').value.trim()||'Unnamed zone',boundary,smooth,noSpray,sprinklers:sprinklers.map(s=>({...s,layer:undefined})),updated:new Date().toISOString()}}
@@ -299,5 +458,17 @@ map.on('click',e=>{if(drawingAvoid){currentAvoid.push(e.latlng);renderAvoid();up
 
 map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('resumeFollowBtn').classList.remove('hidden')}});
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=7;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=8;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+
+// Auth button
+if($('authBtn')){
+  $('authBtn').onclick = ()=>{
+    if(currentUser) signOut();
+    else signIn();
+  };
+}
+
+// Start cloud if keys are present
+initCloud();
+
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./service-worker.js').catch(()=>{});

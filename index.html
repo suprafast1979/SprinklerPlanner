@@ -32,6 +32,8 @@
       <p id="status">Finding your location…</p>
     </div>
     <div class="header-actions">
+      <span id="authLabel" style="font-size:0.75rem;opacity:0.85;margin-right:6px;"></span>
+      <button id="authBtn" class="mode-btn hidden">Sign in</button>
       <button id="plannerModeBtn" class="mode-btn active">Plan</button>
       <button id="deployModeBtn" class="mode-btn">Set Up</button>
     </div>
@@ -85,7 +87,7 @@
             <input type="file" id="importInput" accept=".json" />
           </label>
         </div>
-        <p class="help">Projects hold multiple zones (yard, pasture, orchard, etc.).</p>
+        <p class="help">Projects hold multiple zones (yard, pasture, orchard, etc.). Sign in (top right) to sync across devices. Export / Import still works as a backup or for sharing a single project.</p>
       </div>
 
       <div id="zoneTab" class="tabbody">
@@ -273,6 +275,7 @@
   <button id="resumeFollowBtn" class="resume-follow hidden">Resume following</button>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
