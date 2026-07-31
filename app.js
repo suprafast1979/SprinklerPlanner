@@ -49,24 +49,27 @@ function refreshLayoutChoices(){const s=$('layoutSprinklerSelect');s.innerHTML=s
 function startGPS(center=false){
   if(!navigator.geolocation)return setStatus('Geolocation unavailable');
   if(center){centerOnNextFix=true;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
-  if(watchId===null)watchId=navigator.geolocation.watchPosition(handleGPS,err=>{
+  if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null}
+  watchId=navigator.geolocation.watchPosition(handleGPS,err=>{
     setStatus(err.code===1?'Location permission is needed to center the map':`GPS: ${err.message}`)
-  },{enableHighAccuracy:true,maximumAge:1500,timeout:20000})
-  else if(center&&currentPosition)centerMapOnUser();
+  },{enableHighAccuracy:true,maximumAge:0,timeout:12000})
+  if(center&&currentPosition)centerMapOnUser();
 }
 function centerMapOnUser(){if(!currentPosition)return;map.setView(currentPosition,19);centerOnNextFix=false;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
 function handleGPS(pos){
   const p={lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy,t:pos.timestamp};currentPosition=p;
-  $('accuracy').textContent=`±${Math.round(mToFt(p.accuracy))} ft`;
+  const accFt=Math.round(mToFt(p.accuracy));
+  $('accuracy').textContent=`±${accFt} ft`;
+  $('accuracy').style.color=accFt<=12?'#1b9b50':accFt<=25?'#c98a00':'#a93636';
   if(!userMarker){userMarker=L.circleMarker(p,{radius:7,color:'#fff',weight:2,fillColor:'#1b9b50',fillOpacity:1}).addTo(map);accuracyCircle=L.circle(p,{radius:p.accuracy,color:'#1b9b50',weight:1,fillOpacity:.08}).addTo(map)}else{userMarker.setLatLng(p);accuracyCircle.setLatLng(p).setRadius(p.accuracy)}
   if(centerOnNextFix){centerMapOnUser();selectNearestDeployZone();setStatus('Location found')}
   else if(followUser&&currentMode==='deploy')map.panTo(p,{animate:true,duration:.35});
-  gpsSamples.push(p);gpsSamples=gpsSamples.filter(x=>p.t-x.t<8000).slice(-8);
+  gpsSamples.push(p);gpsSamples=gpsSamples.filter(x=>p.t-x.t<10000).slice(-12);
   if(walking&&!paused)maybeRecordGPS(p);
   updateDeployGuidance();
 }
-function averagedFix(){const limit=Number($('accuracyLimit').value),good=gpsSamples.filter(p=>p.accuracy<=limit);if(!good.length)return null;let w=0,lat=0,lng=0;good.forEach(p=>{const q=1/Math.max(1,p.accuracy*p.accuracy);w+=q;lat+=p.lat*q;lng+=p.lng*q});return{lat:lat/w,lng:lng/w,accuracy:Math.min(...good.map(p=>p.accuracy))}}
-function maybeRecordGPS(p){const limit=Number($('accuracyLimit').value);if(p.accuracy>limit)return;const q=averagedFix();if(!q)return;const last=boundary.at(-1);if(last){const d=dist(last,q);if(d<2.2)return;if(d>25&&p.accuracy>4)return}boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus(`Recording perimeter • ${boundary.length} points`)}
+function averagedFix(){const limit=Number($('accuracyLimit').value),good=gpsSamples.filter(p=>p.accuracy<=limit);if(good.length<2)return null;let w=0,lat=0,lng=0;good.forEach(p=>{const q=1/Math.max(1,p.accuracy*p.accuracy);w+=q;lat+=p.lat*q;lng+=p.lng*q});return{lat:lat/w,lng:lng/w,accuracy:Math.min(...good.map(p=>p.accuracy))}}
+function maybeRecordGPS(p){const limit=Number($('accuracyLimit').value);if(p.accuracy>limit)return;const q=averagedFix();if(!q)return;const last=boundary.at(-1);if(last){const d=dist(last,q);if(d<2.5)return;if(d>18&&p.accuracy>5)return}boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus(`Recording perimeter • ${boundary.length} points`)}
 function addAveragedPoint(){startGPS(false);const q=averagedFix();if(!q)return setStatus('Waiting for an accurate GPS fix');boundary.push({lat:q.lat,lng:q.lng});smooth=[];renderBoundary();setStatus('Averaged GPS point added')}
 
 function pointCovered(q,s){const p=localXY(q,s.position);if(s.pattern==='rectangle')return Math.abs(p.x)<=s.width/2&&Math.abs(p.y)<=s.length/2;return Math.hypot(p.x,p.y)<=s.radius}
@@ -124,8 +127,18 @@ function compassDirection(from,to){const y=Math.sin((to.lng-from.lng)*Math.PI/18
 function updateDeployGuidance(){
   if(currentMode!=='deploy'||!deployZone||deployIndex>=sprinklers.length)return;
   const target=sprinklers[deployIndex].position;if(!currentPosition){$('deployDistance').textContent='Waiting for GPS…';return}
-  const feet=Math.round(mToFt(dist(currentPosition,target)));$('deployDistance').textContent=feet<=5?'You are here':`${feet} ft`;$('deployDirection').textContent=feet<=5?'Place the sprinkler at the highlighted point':`Walk ${compassDirection(currentPosition,target)} toward the highlighted point`;
-  const bucket=feet<=5?0:feet<=15?Math.ceil(feet/3)*3:Math.ceil(feet/10)*10;if(bucket!==lastSpokenDistance&&(bucket===0||bucket<=30)){lastSpokenDistance=bucket;speak(bucket===0?'You have arrived. Place the sprinkler.':`${feet} feet`)}
+  const feet=Math.round(mToFt(dist(currentPosition,target)));
+  const accFt=Math.round(mToFt(currentPosition.accuracy));
+  $('deployDistance').textContent=feet<=6?'You are here':`${feet} ft`;
+  if(feet<=6){
+    if(accFt<=14){$('deployDirection').textContent='Good accuracy — place the sprinkler';$('placedBtn').disabled=false}
+    else{$('deployDirection').textContent=`Accuracy still ±${accFt} ft — hold still for a better fix`;$('placedBtn').disabled=true}
+  }else{
+    $('deployDirection').textContent=`Walk ${compassDirection(currentPosition,target)} toward the highlighted point`;
+    $('placedBtn').disabled=true;
+  }
+  const bucket=feet<=6?0:feet<=15?Math.ceil(feet/3)*3:Math.ceil(feet/10)*10;
+  if(bucket!==lastSpokenDistance&&(bucket===0||bucket<=30)){lastSpokenDistance=bucket;speak(bucket===0?(accFt<=14?'You have arrived. Place the sprinkler.':'You are here, but accuracy is still low. Hold still.'):`${feet} feet`)}
 }
 function nextDeploy(markPlaced){if(deployIndex>=sprinklers.length)return;if(markPlaced)deployed.add(deployIndex);deployIndex++;lastSpokenDistance=null;showDeployTarget()}
 
