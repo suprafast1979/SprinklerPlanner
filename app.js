@@ -10,6 +10,7 @@ L.control.layers({Satellite:imagery,Streets:street}).addTo(map);
 // ============================================================
 const SUPABASE_URL = 'https://rdipkufbaakfeqvqkcai.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJkaXBrdWZiYWFrZmVxdnFrY2FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1NDA1OTMsImV4cCI6MjEwMTExNjU5M30.7rCoja-zBijMk2TBT08v1_JwtGzQSUPo3Sg4IWExl-E';
+
 let supabaseClient = null;
 let currentUser = null;
 let cloudEnabled = false;
