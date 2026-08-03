@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=13" />
   <style>
     .vertex-num {
       width: 22px;
@@ -133,8 +133,29 @@
         </div>
         <div id="inventoryList" class="list"></div>
 
+        <hr />
+        <h3 class="subhead">Store — popular sprinklers</h3>
+        <p class="help">Tap a product to compare prices at Amazon, Lowe’s, Home Depot, Jerry’s (Eugene), Walmart, and Tractor Supply. You can also add it to your inventory.</p>
+        <div id="storeGrid" class="store-grid"></div>
+
         <div class="wizard-nav">
           <button id="backFromInventoryBtn" class="secondary">← Back</button>
+        </div>
+      </div>
+
+      <!-- Store product detail / price modal -->
+      <div id="storeModal" class="store-modal hidden">
+        <div class="store-modal-card">
+          <button id="storeModalClose" class="store-modal-close" aria-label="Close">×</button>
+          <div id="storeModalVisual" class="store-visual large"></div>
+          <h3 id="storeModalTitle">Product</h3>
+          <p id="storeModalDesc" class="help"></p>
+          <div class="row">
+            <button id="storeAddInvBtn">Add to my inventory</button>
+          </div>
+          <div class="rec-links-label">Compare prices (opens in new tab)</div>
+          <div id="storeRetailerLinks" class="rec-links"></div>
+          <p class="help rec-disclaimer">Links open live search results. Prices and stock change. Jerry’s is local to the Eugene / Springfield area.</p>
         </div>
       </div>
 
@@ -352,6 +373,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>

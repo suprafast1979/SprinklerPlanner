@@ -271,9 +271,115 @@ function renderAll(){renderBoundary();renderAvoid();renderSprinklers();updateBut
 function updateButtons(){$('pauseWalkBtn').disabled=!walking;$('finishWalkBtn').disabled=!walking||boundary.length<3;$('pauseWalkBtn').textContent=paused?'Resume':'Pause';$('finishAvoidBtn').disabled=!drawingAvoid||currentAvoid.length<3;$('editBtn').textContent=editMode?'Done editing':'Edit points'}
 function updateMetrics(){$('pointCount').textContent=boundary.length;const a=area(displayBoundary());$('areaValue').textContent=a?`${Math.round(a*10.7639).toLocaleString()} sq ft`:'—';$('activeZoneLabel').textContent=$('zoneName').value||'Unnamed'}
 
-function refreshSelectors(){const ps=$('projectSelect');ps.innerHTML=state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');ps.value=state.activeProjectId||'';const p=activeProject();$('projectName').value=p?.name||'';const zs=$('zoneSelect');zs.innerHTML=p?.zones.length?p.zones.map(z=>`<option value="${z.id}">${z.name}</option>`).join(''):'<option value="">No saved zones</option>';if(state.activeZoneId)zs.value=state.activeZoneId;renderInventory();refreshLayoutChoices()}
+function refreshSelectors(){const ps=$('projectSelect');ps.innerHTML=state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');ps.value=state.activeProjectId||'';const p=activeProject();$('projectName').value=p?.name||'';const zs=$('zoneSelect');zs.innerHTML=p?.zones.length?p.zones.map(z=>`<option value="${z.id}">${z.name}</option>`).join(''):'<option value="">No saved zones</option>';if(state.activeZoneId)zs.value=state.activeZoneId;renderInventory();refreshLayoutChoices();renderStore()}
 function renderInventory(){const box=$('inventoryList');box.innerHTML=state.inventory.length?'':'<p class="help">No sprinklers saved.</p>';state.inventory.forEach(item=>{const d=document.createElement('div');d.className='list-item';const desc=item.pattern==='rectangle'?`${item.length} × ${item.width} ft rectangle`:`${item.radius} ft radius${item.pattern==='sector'?`, ${item.angle}° max`:''}`;d.innerHTML=`<div><strong>${item.name} ×${item.qty}</strong><small>${desc}</small></div><button class="danger" data-id="${item.id}">Delete</button>`;d.querySelector('button').onclick=()=>{state.inventory=state.inventory.filter(x=>x.id!==item.id);save();refreshSelectors()};box.appendChild(d)})}
 function refreshLayoutChoices(){const s=$('layoutSprinklerSelect');s.innerHTML=state.inventory.length?state.inventory.map(x=>`<option value="${x.id}">${x.name} ×${x.qty}</option>`).join(''):'<option value="">Add a sprinkler first</option>'}
+
+// ========== STORE CATALOG ==========
+const STORE_CATALOG = [
+  { id:'orbit-zinc', name:'Orbit Zinc Impact', emoji:'💧', visual:'impact', pattern:'circle', radius:40, angle:360, length:0, width:0,
+    desc:'Classic metal impact head. Adjustable arc, ~20–40 ft throw. Great all-around yard sprinkler.',
+    query:'Orbit zinc impact sprinkler' },
+  { id:'rainbird-impact', name:'Rain Bird Impact', emoji:'🌧️', visual:'impact', pattern:'circle', radius:35, angle:360, length:0, width:0,
+    desc:'Durable plastic/metal impact sprinkler. Reliable full- or part-circle coverage.',
+    query:'Rain Bird impact sprinkler portable' },
+  { id:'orbit-watermaster', name:'Orbit WaterMaster Impulse', emoji:'⚙️', visual:'impact', pattern:'circle', radius:45, angle:360, length:0, width:0,
+    desc:'Heavy-duty impulse sprinkler for larger lawns. Longer throw radius.',
+    query:'Orbit WaterMaster impulse sprinkler' },
+  { id:'melnor-xt', name:'Melnor XT Turbo Oscillating', emoji:'↔️', visual:'oscillating', pattern:'rectangle', radius:0, angle:360, length:60, width:35,
+    desc:'Oscillating sprinkler for rectangular lawns. Width/length adjustable.',
+    query:'Melnor XT Turbo oscillating sprinkler' },
+  { id:'melnor-metal', name:'Melnor Metal Oscillating', emoji:'📏', visual:'oscillating', pattern:'rectangle', radius:0, angle:360, length:55, width:30,
+    desc:'Metal-base oscillating sprinkler. Stable and good for medium rectangular zones.',
+    query:'Melnor metal oscillating sprinkler' },
+  { id:'nelson-raintrain', name:'Nelson RainTrain Traveling', emoji:'🚜', visual:'traveling', pattern:'rectangle', radius:0, angle:360, length:70, width:40,
+    desc:'Traveling sprinkler that walks a path while watering. Ideal for long rectangular areas.',
+    query:'Nelson RainTrain traveling sprinkler' },
+  { id:'gilmour-circular', name:'Gilmour Circular Pattern', emoji:'⭕', visual:'rotary', pattern:'circle', radius:30, angle:360, length:0, width:0,
+    desc:'Simple circular pattern sprinkler. Easy setup for smaller round areas.',
+    query:'Gilmour circular pattern sprinkler' },
+  { id:'dramm-colorstorm', name:'Dramm ColorStorm Revolving', emoji:'🌀', visual:'rotary', pattern:'circle', radius:25, angle:360, length:0, width:0,
+    desc:'Revolving head with even spray. Good for flower beds and smaller lawns.',
+    query:'Dramm ColorStorm revolving sprinkler' },
+  { id:'aquajoe-iris', name:'Aqua Joe Indestructible Metal', emoji:'🛡️', visual:'impact', pattern:'circle', radius:50, angle:360, length:0, width:0,
+    desc:'All-metal construction, large coverage. Built for durability.',
+    query:'Aqua Joe AJ-IRIS indestructible metal sprinkler' },
+  { id:'rainbird-rotor-port', name:'Rain Bird Portable Rotor', emoji:'🔄', visual:'rotary', pattern:'circle', radius:35, angle:360, length:0, width:0,
+    desc:'Gear-driven rotor style on a portable base. Quiet and efficient.',
+    query:'Rain Bird portable rotor sprinkler' }
+];
+
+let selectedStoreProduct = null;
+
+function retailerLinksFor(query){
+  const q = encodeURIComponent(query);
+  return [
+    { name:'Amazon', subtitle:'Usually widest selection', url:`https://www.amazon.com/s?k=${q}` },
+    { name:"Lowe's", subtitle:'In-store pickup available', url:`https://www.lowes.com/search?searchTerm=${q}` },
+    { name:'Home Depot', subtitle:'In-store pickup available', url:`https://www.homedepot.com/s/${q}` },
+    { name:"Jerry's Home Improvement", subtitle:'Eugene / Springfield local', url:`https://www.google.com/search?q=${encodeURIComponent(query + " site:betterheadforjerrys.com OR Jerry's Home Improvement Eugene sprinkler")}` },
+    { name:'Walmart', subtitle:'Often lowest price', url:`https://www.walmart.com/search?q=${q}` },
+    { name:'Tractor Supply', subtitle:'Good for rural / bulk', url:`https://www.tractorsupply.com/tsc/search/${q}` }
+  ];
+}
+
+function renderStore(){
+  const grid = $('storeGrid');
+  if(!grid) return;
+  grid.innerHTML = STORE_CATALOG.map(p => `
+    <button type="button" class="store-card" data-id="${p.id}">
+      <div class="store-visual ${p.visual}">${p.emoji}</div>
+      <strong>${p.name}</strong>
+      <small>${p.pattern==='rectangle' ? `${p.length}×${p.width} ft` : `${p.radius} ft radius`}</small>
+    </button>
+  `).join('');
+  grid.querySelectorAll('.store-card').forEach(btn => {
+    btn.onclick = () => openStoreProduct(btn.dataset.id);
+  });
+}
+
+function openStoreProduct(id){
+  const p = STORE_CATALOG.find(x => x.id === id);
+  if(!p) return;
+  selectedStoreProduct = p;
+  const modal = $('storeModal');
+  if(!modal) return;
+  $('storeModalVisual').className = `store-visual large ${p.visual}`;
+  $('storeModalVisual').textContent = p.emoji;
+  $('storeModalTitle').textContent = p.name;
+  $('storeModalDesc').textContent = p.desc + (p.pattern==='rectangle'
+    ? ` Coverage about ${p.length} × ${p.width} ft.`
+    : ` Typical throw about ${p.radius} ft.`);
+  const box = $('storeRetailerLinks');
+  box.innerHTML = retailerLinksFor(p.query).map(r =>
+    `<a class="rec-link" href="${r.url}" target="_blank" rel="noopener noreferrer">${r.name}<small>${r.subtitle}</small></a>`
+  ).join('');
+  modal.classList.remove('hidden');
+}
+
+function closeStoreModal(){
+  $('storeModal')?.classList.add('hidden');
+  selectedStoreProduct = null;
+}
+
+function addStoreProductToInventory(){
+  if(!selectedStoreProduct) return;
+  const p = selectedStoreProduct;
+  state.inventory.push({
+    id: uid(),
+    name: p.name,
+    qty: 1,
+    pattern: p.pattern,
+    radius: p.radius || 35,
+    angle: p.angle || 360,
+    length: p.length || 50,
+    width: p.width || 30
+  });
+  save();
+  refreshSelectors();
+  setStatus(`Added “${p.name}” to inventory`);
+  closeStoreModal();
+}
 
 function vibrateAlert(){
   if(navigator.vibrate){
@@ -407,7 +513,65 @@ function updateCoverage(){
   $('recommendValue').textContent=r.coverage>=99?'Good':r.coverage>=95?'Minor adjustment':'Add or reposition';
 }
 
-function candidateAllowed(q,o,poly,avoids){const p=localXY(q,o);return pip(p,poly)&&!avoids.some(a=>pip(p,a))}
+// Minimum distance from point p to polygon (local XY coords). 0 if inside.
+function minDistToPoly(p, poly){
+  if(pip(p, poly)) return 0;
+  let minD = Infinity;
+  for(let i=0, j=poly.length-1; i<poly.length; j=i++){
+    const a = poly[j], b = poly[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx*dx + dy*dy || 1e-12;
+    let t = ((p.x-a.x)*dx + (p.y-a.y)*dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const proj = {x: a.x + t*dx, y: a.y + t*dy};
+    const d = Math.hypot(p.x - proj.x, p.y - proj.y);
+    if(d < minD) minD = d;
+  }
+  return minD;
+}
+
+// True only if sprinkler center is in the zone AND its coverage does not
+// intersect any no-spray polygon.
+function candidateAllowed(q, o, poly, avoids, item){
+  const p = localXY(q, o);
+  // Center must be inside the zone and outside every no-spray area
+  if(!pip(p, poly)) return false;
+  if(avoids.some(a => pip(p, a))) return false;
+
+  // Coverage must not reach into any no-spray area
+  if(item.pattern === 'rectangle'){
+    const halfW = ftToM(item.width || 30) / 2;
+    const halfL = ftToM(item.length || 50) / 2;
+    // Sample the rectangle corners + center edges; reject if any sample
+    // falls inside a no-spray poly or the rect overlaps one closely
+    const samples = [
+      {x: p.x - halfW, y: p.y - halfL},
+      {x: p.x + halfW, y: p.y - halfL},
+      {x: p.x + halfW, y: p.y + halfL},
+      {x: p.x - halfW, y: p.y + halfL},
+      {x: p.x, y: p.y - halfL},
+      {x: p.x, y: p.y + halfL},
+      {x: p.x - halfW, y: p.y},
+      {x: p.x + halfW, y: p.y}
+    ];
+    for(const s of samples){
+      if(avoids.some(a => pip(s, a))) return false;
+    }
+    // Also reject if any no-spray poly comes within a small margin of the rect
+    for(const a of avoids){
+      for(const ap of a){
+        if(Math.abs(ap.x - p.x) <= halfW + 0.5 && Math.abs(ap.y - p.y) <= halfL + 0.5) return false;
+      }
+    }
+  } else {
+    // Circular / sector: reject if distance to any no-spray poly < radius
+    const r = ftToM(item.radius || 35);
+    for(const a of avoids){
+      if(minDistToPoly(p, a) < r - 0.3) return false; // small tolerance
+    }
+  }
+  return true;
+}
 
 function hideSmartRecommendations(){
   const panel=$('smartRecPanel');
@@ -568,7 +732,7 @@ function generateLayout(){
     const off = (row++ % 2) * sx / 2;
     for(let x = minX + off; x <= maxX && sprinklers.length < max; x += sx){
       const q = ll({x, y}, o);
-      if(!candidateAllowed(q, o, poly, avoids)) continue;
+      if(!candidateAllowed(q, o, poly, avoids, item)) continue;
       sprinklers.push({
         inventoryId: item.id,
         name: item.name,
@@ -583,17 +747,20 @@ function generateLayout(){
   }
 
   if(!sprinklers.length){
+    // Fallback: only place at centroid if it itself is allowed
     const c = centroid(zone);
-    sprinklers.push({
-      inventoryId: item.id,
-      name: item.name,
-      pattern: item.pattern,
-      position: c,
-      radius: ftToM(item.radius || 0),
-      angle: item.angle || 360,
-      length: ftToM(item.length || 0),
-      width: ftToM(item.width || 0)
-    });
+    if(candidateAllowed(c, o, poly, avoids, item)){
+      sprinklers.push({
+        inventoryId: item.id,
+        name: item.name,
+        pattern: item.pattern,
+        position: c,
+        radius: ftToM(item.radius || 0),
+        angle: item.angle || 360,
+        length: ftToM(item.length || 0),
+        width: ftToM(item.width || 0)
+      });
+    }
   }
 
   renderSprinklers();
@@ -741,6 +908,11 @@ if($('backToZonesBtn')) $('backToZonesBtn').onclick = () => goToStep('zones');
 if($('goDeployBtn')) $('goDeployBtn').onclick = () => setMode('deploy');
 if($('goInventoryBtn')) $('goInventoryBtn').onclick = () => goToStep('inventory');
 if($('backFromInventoryBtn')) $('backFromInventoryBtn').onclick = () => goToStep('project');
+if($('storeModalClose')) $('storeModalClose').onclick = closeStoreModal;
+if($('storeAddInvBtn')) $('storeAddInvBtn').onclick = addStoreProductToInventory;
+if($('storeModal')){
+  $('storeModal').onclick = e => { if(e.target === $('storeModal')) closeStoreModal(); };
+}
 
 // Progress step clicks
 document.querySelectorAll('.wiz-step').forEach(btn => {
@@ -759,6 +931,7 @@ const SEARCH_INTENTS = [
   { keywords: ['start walking', 'start recording', 'walk perimeter'], label: 'Start walking perimeter', action: () => { setMode('planner'); goToStep('zones'); setTimeout(() => $('startWalkBtn')?.click(), 200); } },
   { keywords: ['no spray', 'no-spray', 'avoid', 'keep dry'], label: 'No-spray areas', action: () => { setMode('planner'); goToStep('zones'); } },
   { keywords: ['locate', 'my location', 'center map', 'gps'], label: 'Center map on me', action: () => startGPS(true) },
+  { keywords: ['store', 'buy', 'shop', 'purchase', 'amazon', 'prices', 'retailer'], label: 'Open Store (buy sprinklers)', action: () => { setMode('planner'); goToStep('inventory'); } },
 ];
 
 function openSearch(){
@@ -1008,7 +1181,7 @@ if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
 if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=11;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=13;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 
 // Auth button
