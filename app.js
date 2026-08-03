@@ -1,4 +1,4 @@
-const APP_VERSION = 18;
+const APP_VERSION = 20;
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
 const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
 const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -234,32 +234,54 @@ function renderBoundary(){
   updateMetrics();
 }
 function renderAvoid(){avoidLayers.forEach(removeLayer);avoidLayers=[];noSpray.forEach(a=>avoidLayers.push(L.polygon(a.points,{color:'#b33838',fillColor:'#d74b4b',fillOpacity:.32,weight:3}).bindTooltip(a.name).addTo(map)));removeLayer(currentAvoidLine);if(currentAvoid.length)currentAvoidLine=L.polyline(currentAvoid,{color:'#d54b4b',dashArray:'6,6',weight:3}).addTo(map);$('avoidCount').textContent=noSpray.length;$('avoidDrawing').textContent=drawingAvoid?'Yes':'No'}
+function sectorPolygon(center, radiusM, aimDeg, arcDeg, steps=24){
+  // aimDeg is center of the arc, 0=N; Leaflet paths use lat/lng
+  const half = (arcDeg || 180) / 2;
+  const start = aimDeg - half;
+  const pts = [center];
+  for(let i=0;i<=steps;i++){
+    const a = (start + (arcDeg * i / steps)) * Math.PI / 180;
+    // 0° = north → local: x=east=sin, y=north=cos
+    pts.push(ll({x: radiusM * Math.sin(a), y: radiusM * Math.cos(a)}, center));
+  }
+  pts.push(center);
+  return pts;
+}
+
 function coverageLayer(s,i){
   const pos = s.position;
   const isDone = deployed.has(i);
   const labelClass = isDone ? 'sprinkler-label done' : 'sprinkler-label';
   const label = `<div>${isDone ? '✓' : (i+1)}</div>`;
   const coverColor = isDone ? '#1b9b50' : '#1976c8';
-  let coverLayer;
+  const layers = [];
   if(s.pattern === 'rectangle'){
     const o = pos, halfW = s.width/2, halfL = s.length/2;
     const pts = [ll({x:-halfW,y:-halfL},o), ll({x:halfW,y:-halfL},o), ll({x:halfW,y:halfL},o), ll({x:-halfW,y:halfL},o)];
-    coverLayer = L.polygon(pts, {color:coverColor, fillOpacity:.14, weight:2}).addTo(map);
+    layers.push(L.polygon(pts, {color:coverColor, fillOpacity:.14, weight:2}).addTo(map));
+  } else if(s.aimDeg != null && s.suggestedArc){
+    // Full reach circle (faint) + recommended adjustable arc (stronger)
+    layers.push(L.circle(pos, {radius:s.radius, color:coverColor, fillOpacity:.04, weight:1, dashArray:'4,6'}).addTo(map));
+    const wedge = sectorPolygon(pos, s.radius, s.aimDeg, s.suggestedArc);
+    layers.push(L.polygon(wedge, {color:'#d17a00', fillColor:'#f0a830', fillOpacity:.22, weight:2}).addTo(map));
   } else {
-    coverLayer = L.circle(pos, {radius:s.radius, color:coverColor, fillOpacity:.12, weight:2}).addTo(map);
+    layers.push(L.circle(pos, {radius:s.radius, color:coverColor, fillOpacity:.12, weight:2}).addTo(map));
   }
   const marker = L.marker(pos, {
     icon: L.divIcon({ className: labelClass, html: label, iconSize:[28,28], iconAnchor:[14,14] }),
     interactive: true
   }).addTo(map);
-  // Tap marker to mark satisfied during deploy / any time
+  if(s.aimNote){
+    marker.bindTooltip(`#${i+1}: ${s.aimNote}`, {permanent:false, direction:'top'});
+  }
   marker.on('click', (ev) => {
     L.DomEvent.stopPropagation(ev);
     if(currentMode === 'deploy' || sprinklers.length){
       toggleSprinklerDone(i);
     }
   });
-  return [coverLayer, marker];
+  layers.push(marker);
+  return layers;
 }
 function renderSprinklers(){
   sprinklerLayers.flat().forEach(removeLayer);
@@ -667,16 +689,66 @@ function renderSmartRecommendations(data){
   }).join('');
 }
 
-function makeSprinkler(item, q){
+// Bearing (degrees, 0=N) from point A to B
+function bearingDeg(a, b){
+  const y = Math.sin((b.lng-a.lng)*Math.PI/180)*Math.cos(b.lat*Math.PI/180);
+  const x = Math.cos(a.lat*Math.PI/180)*Math.sin(b.lat*Math.PI/180) -
+            Math.sin(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.cos((b.lng-a.lng)*Math.PI/180);
+  return (Math.atan2(y, x)*180/Math.PI + 360) % 360;
+}
+function compassLabel(deg){
+  return ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg/45)%8];
+}
+
+// If station is close to a no-spray, suggest aiming into the zone (away from red).
+function edgeAimAdvice(q, o, poly, avoids, radiusM){
+  if(!avoids.length) return null;
+  const p = localXY(q, o);
+  let nearest = null, nearestD = Infinity;
+  for(const a of avoids){
+    const d = minDistToPoly(p, a);
+    if(d < nearestD){ nearestD = d; nearest = a; }
+  }
+  if(!nearest || nearestD > radiusM * 0.95) return null; // not close enough to matter
+
+  // Centroid of nearest no-spray
+  const cx = nearest.reduce((s,v)=>s+v.x,0)/nearest.length;
+  const cy = nearest.reduce((s,v)=>s+v.y,0)/nearest.length;
+  const noSprayLL = ll({x:cx, y:cy}, o);
+
+  // Aim opposite of no-spray (into the lawn)
+  let aim = (bearingDeg(q, noSprayLL) + 180) % 360;
+
+  // Suggested arc: tighter when very close to no-spray
+  let arc = 180;
+  if(nearestD < radiusM * 0.35) arc = 90;
+  else if(nearestD < radiusM * 0.6) arc = 120;
+  else arc = 180;
+
+  return {
+    aimDeg: aim,
+    aimLabel: compassLabel(aim),
+    arc,
+    distFt: Math.round(mToFt(nearestD)),
+    note: `Aim ~${compassLabel(aim)}, limit sweep to about ${arc}° so spray stays on the lawn and off the no-spray area (~${Math.round(mToFt(nearestD))} ft away).`
+  };
+}
+
+function makeSprinkler(item, q, o, poly, avoids){
+  const radiusM = ftToM(item.radius || 35);
+  const advice = (o && poly) ? edgeAimAdvice(q, o, poly, avoids||[], radiusM) : null;
   return {
     inventoryId: item.id,
     name: item.name,
     pattern: item.pattern,
     position: q,
-    radius: ftToM(item.radius || 0),
+    radius: radiusM,
     angle: item.angle || 360,
     length: ftToM(item.length || 0),
-    width: ftToM(item.width || 0)
+    width: ftToM(item.width || 0),
+    aimDeg: advice?.aimDeg ?? null,
+    suggestedArc: advice?.arc ?? null,
+    aimNote: advice?.note ?? null
   };
 }
 
@@ -720,7 +792,7 @@ function generateLayout(){
       const q = ll({x, y}, o);
       if(!candidateAllowed(q, o, poly, avoids, item)) continue;
       if(sprinklers.some(s => dist(s.position, q) < sx * 0.45)) continue;
-      sprinklers.push(makeSprinkler(item, q));
+      sprinklers.push(makeSprinkler(item, q, o, poly, avoids));
     }
   }
 
@@ -761,14 +833,14 @@ function generateLayout(){
         }
       }
       if(!best) break;
-      sprinklers.push(makeSprinkler(item, best));
+      sprinklers.push(makeSprinkler(item, best, o, poly, avoids));
     }
   }
 
   if(!sprinklers.length){
     const c = centroid(zone);
     if(candidateAllowed(c, o, poly, avoids, item)){
-      sprinklers.push(makeSprinkler(item, c));
+      sprinklers.push(makeSprinkler(item, c, o, poly, avoids));
     }
   }
 
@@ -790,8 +862,47 @@ function generateLayout(){
     hideSmartRecommendations();
   }
 
+  renderAimRecommendations();
+
+  const aimed = sprinklers.filter(s => s.aimNote).length;
   const covTxt = r ? ` • ${r.coverage.toFixed(1)}% coverage` : '';
-  setStatus(`Placed ${sprinklers.length} station${sprinklers.length === 1 ? '' : 's'}${covTxt}`);
+  const aimTxt = aimed ? ` • ${aimed} adjustable near no-spray` : '';
+  setStatus(`Placed ${sprinklers.length} station${sprinklers.length === 1 ? '' : 's'}${covTxt}${aimTxt}`);
+}
+
+function renderAimRecommendations(){
+  let panel = $('aimRecPanel');
+  if(!panel){
+    // Create once under layout metrics if missing
+    const layout = $('stepLayout');
+    if(!layout) return;
+    panel = document.createElement('div');
+    panel.id = 'aimRecPanel';
+    panel.className = 'smart-rec hidden';
+    panel.innerHTML = `
+      <div class="smart-rec-header">
+        <span class="smart-badge">Aim geometry</span>
+        <h3>Adjustable heads near no-spray</h3>
+      </div>
+      <p class="rec-summary">Orange wedges show the recommended sweep so you cover the lawn without backspray into red zones. Set the sprinkler arc to match.</p>
+      <ul id="aimRecList" class="rec-reasons"></ul>
+    `;
+    const nav = layout.querySelector('.wizard-nav');
+    if(nav) layout.insertBefore(panel, nav);
+    else layout.appendChild(panel);
+  }
+  const list = $('aimRecList');
+  const aimed = sprinklers
+    .map((s,i) => ({s,i}))
+    .filter(x => x.s.aimNote);
+  if(!aimed.length){
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  list.innerHTML = aimed.map(({s,i}) =>
+    `<li><strong>Station ${i+1}</strong> — aim <strong>${s.aimDeg != null ? compassLabel(s.aimDeg) : '?'}</strong>, ~${s.suggestedArc || 180}° sweep. ${s.aimNote}</li>`
+  ).join('');
 }
 
 
@@ -822,41 +933,98 @@ function setMode(mode){
   if(mode==='deploy'){refreshDeployChoices();selectNearestDeployZone();followUser=true;startGPS(true)}
   setTimeout(()=>map.invalidateSize(),80);
 }
+function firstIncompleteIndex(){
+  for(let i=0;i<sprinklers.length;i++) if(!deployed.has(i)) return i;
+  return sprinklers.length;
+}
+function nextIncompleteIndex(from){
+  for(let i=from+1;i<sprinklers.length;i++) if(!deployed.has(i)) return i;
+  return sprinklers.length;
+}
+function prevIncompleteIndex(from){
+  for(let i=from-1;i>=0;i--) if(!deployed.has(i)) return i;
+  return from;
+}
+
 function beginDeployment(resume=false){
   const chosen=selectedDeployZone();if(!chosen?.zone)return setStatus('Save a zone first');
   deployZone=chosen.zone;
   if(!deployZone.sprinklers?.length){$('deployEmpty').classList.remove('hidden');$('deployActive').classList.add('hidden');return setStatus('This zone has no saved sprinkler layout')}
   $('deployEmpty').classList.add('hidden');$('deployActive').classList.remove('hidden');
-  if(!resume){deployIndex=0;deployed=new Set();}
+  if(!resume){deployed=new Set(); deployIndex=0;}
   boundary=(deployZone.boundary||[]).map(p=>({...p}));smooth=(deployZone.smooth||[]).map(p=>({...p}));noSpray=(deployZone.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(deployZone.sprinklers||[]).map(s=>({...s}));
+  // Always start guidance on the first station that is not done yet
+  deployIndex = firstIncompleteIndex();
   renderAll();showDeployTarget();startGPS(true);setStatus(`Setting up ${deployZone.name}`);
 }
-function speak(text){if(!$('voiceGuidance').checked||!('speechSynthesis'in window))return; speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text))}
+function speak(text){if(!$('voiceGuidance')?.checked||!('speechSynthesis'in window))return; speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text))}
 function showDeployTarget(){
   if(!sprinklers.length)return;
-  if(deployIndex>=sprinklers.length){$('deployTitle').textContent='Setup complete';$('deployProgress').textContent=`${sprinklers.length} sprinklers placed`;$('deployDistance').textContent='Complete';$('deployDirection').textContent='All sprinkler positions have been visited.';speak('Sprinkler setup complete');return}
-  $('deployTitle').textContent=deployZone?.name||'Sprinkler setup';$('deployProgress').textContent=`Sprinkler ${deployIndex+1} of ${sprinklers.length}`;
-  sprinklerLayers.flat().forEach((layer,i)=>{if(layer?.getElement)layer.getElement()?.classList.toggle('deploy-target',Math.floor(i/2)===deployIndex)});
-  const target=sprinklers[deployIndex]?.position;if(target)map.panTo(target);updateDeployGuidance();
+  // Snap off any completed index
+  if(deployIndex < sprinklers.length && deployed.has(deployIndex)){
+    deployIndex = nextIncompleteIndex(deployIndex);
+  }
+  if(deployIndex>=sprinklers.length || deployed.size >= sprinklers.length){
+    deployIndex = sprinklers.length;
+    $('deployTitle').textContent='Setup complete';
+    $('deployProgress').textContent=`${sprinklers.length} of ${sprinklers.length} done`;
+    $('deployDistance').textContent='Complete';
+    $('deployDirection').textContent='All stations satisfied. Reset the cycle when you are ready to water again.';
+    if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.remove('hidden');
+    speak('All stations complete');
+    renderSprinklers();
+    return;
+  }
+  if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.add('hidden');
+  $('deployTitle').textContent=deployZone?.name||'Sprinkler setup';
+  const remaining = sprinklers.length - deployed.size;
+  $('deployProgress').textContent=`Station ${deployIndex+1} of ${sprinklers.length} • ${remaining} left`;
+  // Highlight only the active incomplete target
+  sprinklerLayers.flat().forEach((layer,i)=>{
+    if(layer?.getElement){
+      const idx = Math.floor(i/2);
+      layer.getElement()?.classList.toggle('deploy-target', idx===deployIndex);
+    }
+  });
+  const target=sprinklers[deployIndex]?.position;
+  if(target) map.panTo(target);
+  updateDeployGuidance();
+  renderSprinklers();
 }
 function compassDirection(from,to){const y=Math.sin((to.lng-from.lng)*Math.PI/180)*Math.cos(to.lat*Math.PI/180),x=Math.cos(from.lat*Math.PI/180)*Math.sin(to.lat*Math.PI/180)-Math.sin(from.lat*Math.PI/180)*Math.cos(to.lat*Math.PI/180)*Math.cos((to.lng-from.lng)*Math.PI/180);const d=(Math.atan2(y,x)*180/Math.PI+360)%360;return['north','northeast','east','southeast','south','southwest','west','northwest'][Math.round(d/45)%8]}
 function updateDeployGuidance(){
   if(currentMode!=='deploy'||!deployZone||deployIndex>=sprinklers.length)return;
+  if(deployed.has(deployIndex)){ deployIndex = nextIncompleteIndex(deployIndex); showDeployTarget(); return; }
   const target=sprinklers[deployIndex].position;if(!currentPosition){$('deployDistance').textContent='Waiting for GPS…';return}
   const feet=Math.round(mToFt(dist(currentPosition,target)));
   const accFt=Math.round(mToFt(currentPosition.accuracy));
   $('deployDistance').textContent=feet<=6?'You are here':`${feet} ft`;
+  const aim = sprinklers[deployIndex]?.aimNote;
   if(feet<=6){
-    if(accFt<=14){$('deployDirection').textContent='Good accuracy — place the sprinkler';$('placedBtn').disabled=false}
-    else{$('deployDirection').textContent=`Accuracy still ±${accFt} ft — hold still for a better fix`;$('placedBtn').disabled=true}
+    if(accFt<=14){
+      $('deployDirection').textContent = aim
+        ? `Station ${deployIndex+1}: place head, then ${aim}`
+        : `Station ${deployIndex+1} — place the sprinkler, then mark done`;
+      $('placedBtn').disabled=false;
+    } else {
+      $('deployDirection').textContent=`Accuracy still ±${accFt} ft — hold still for a better fix`;
+      $('placedBtn').disabled=true;
+    }
   }else{
-    $('deployDirection').textContent=`Walk ${compassDirection(currentPosition,target)} toward the highlighted point`;
+    $('deployDirection').textContent=`Walk ${compassDirection(currentPosition,target)} to station ${deployIndex+1}` + (aim ? ' (adjustable aim needed)' : '');
     $('placedBtn').disabled=true;
   }
   const bucket=feet<=6?0:feet<=15?Math.ceil(feet/3)*3:Math.ceil(feet/10)*10;
-  if(bucket!==lastSpokenDistance&&(bucket===0||bucket<=30)){lastSpokenDistance=bucket;speak(bucket===0?(accFt<=14?'You have arrived. Place the sprinkler.':'You are here, but accuracy is still low. Hold still.'):`${feet} feet`)}
+  if(bucket!==lastSpokenDistance&&(bucket===0||bucket<=30)){lastSpokenDistance=bucket;speak(bucket===0?(accFt<=14?`Arrived at station ${deployIndex+1}. Place the sprinkler.`:'You are here, but accuracy is still low. Hold still.'):`${feet} feet`)}
 }
-function nextDeploy(markPlaced){if(deployIndex>=sprinklers.length)return;if(markPlaced)deployed.add(deployIndex);deployIndex++;lastSpokenDistance=null;showDeployTarget()}
+function nextDeploy(markPlaced){
+  if(deployIndex>=sprinklers.length)return;
+  if(markPlaced) deployed.add(deployIndex);
+  deployIndex = nextIncompleteIndex(deployIndex);
+  lastSpokenDistance=null;
+  showDeployTarget();
+  updateDeployProgressUI();
+}
 
 // ========== WIZARD NAVIGATION ==========
 let currentWizardStep = 'project';
@@ -1010,7 +1178,11 @@ $('startDeployBtn').onclick=()=>beginDeployment(false);
 $('resumeDeployBtn').onclick=()=>beginDeployment(true);
 $('placedBtn').onclick=()=>nextDeploy(true);
 $('skipBtn').onclick=()=>nextDeploy(false);
-$('previousBtn').onclick=()=>{deployIndex=Math.max(0,deployIndex-1);lastSpokenDistance=null;showDeployTarget()};
+$('previousBtn').onclick=()=>{
+  deployIndex = prevIncompleteIndex(deployIndex);
+  lastSpokenDistance=null;
+  showDeployTarget();
+};
 $('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};
 $('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
 $('floatingLocateBtn').onclick=()=>startGPS(true);
@@ -1238,35 +1410,57 @@ map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('res
 
 // ===== Deploy: tap marker to mark satisfied =====
 function toggleSprinklerDone(idx){
-  if(deployed.has(idx)) deployed.delete(idx);
+  const wasDone = deployed.has(idx);
+  if(wasDone) deployed.delete(idx);
   else deployed.add(idx);
-  renderSprinklers();
+
+  // If we just completed the active target, advance to the next incomplete station
+  if(!wasDone && idx === deployIndex && currentMode === 'deploy'){
+    deployIndex = nextIncompleteIndex(idx);
+    lastSpokenDistance = null;
+  } else if(wasDone && currentMode === 'deploy'){
+    // Un-marking: if nothing active, point guidance at this one again
+    if(deployIndex >= sprinklers.length || deployed.has(deployIndex)){
+      deployIndex = firstIncompleteIndex();
+    }
+  }
+
   updateDeployProgressUI();
+  if(currentMode === 'deploy') showDeployTarget();
+  else renderSprinklers();
+
   if(deployed.size >= sprinklers.length && sprinklers.length > 0){
-    setStatus('All positions satisfied — cycle complete. Ready to reset.');
-    if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.remove('hidden');
+    setStatus('All stations done — cycle complete. Ready to reset.');
+  } else if(!wasDone){
+    setStatus(`Station ${idx+1} done` + (deployIndex < sprinklers.length ? ` — next is ${deployIndex+1}` : ''));
   } else {
-    if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.add('hidden');
+    setStatus(`Station ${idx+1} marked incomplete again`);
   }
 }
 function updateDeployProgressUI(){
   const total = sprinklers.length;
   const done = deployed.size;
-  if($('deployProgress')) $('deployProgress').textContent = total ? `${done} of ${total} satisfied` : 'No sprinklers';
+  if($('deployProgress') && currentMode === 'deploy' && deployIndex < total){
+    $('deployProgress').textContent = `Station ${deployIndex+1} of ${total} • ${total-done} left`;
+  } else if($('deployProgress')){
+    $('deployProgress').textContent = total ? `${done} of ${total} satisfied` : 'No sprinklers';
+  }
   if($('resetCycleBtn')) $('resetCycleBtn').disabled = done === 0;
 }
 function resetWateringCycle(){
   deployed = new Set();
+  deployIndex = 0;
   renderSprinklers();
   updateDeployProgressUI();
   if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.add('hidden');
-  setStatus('Watering cycle reset — ready to go again');
+  if(currentMode === 'deploy') showDeployTarget();
+  setStatus('Watering cycle reset — starting at station 1');
 }
 if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
 if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=13;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=20;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 if($('appVersion')) $('appVersion').textContent = 'v' + APP_VERSION;
 

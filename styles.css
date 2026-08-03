@@ -458,3 +458,15 @@ button.full {
   border: 1px solid #ffffff55;
   letter-spacing: 0.02em;
 }
+
+/* Done stations look finished / grayed — active target stays bright */
+.sprinkler-label.done {
+  background: #6b7a70 !important;
+  opacity: 0.85;
+  box-shadow: none !important;
+}
+.sprinkler-label.deploy-target {
+  background: #0d5c2e !important;
+  box-shadow: 0 0 0 4px #fff, 0 0 12px #176b3a !important;
+  transform: scale(1.15);
+}
