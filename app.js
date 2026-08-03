@@ -1,4 +1,4 @@
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
 const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
 const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -700,7 +700,20 @@ function compassLabel(deg){
   return ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg/45)%8];
 }
 
-// If station is close to a no-spray, suggest aiming into the zone (away from red).
+// Distance from a lat/lng point to nearest no-spray polygon (meters, local frame)
+function distToNearestNoSpray(q, o, avoids){
+  if(!avoids.length) return Infinity;
+  const p = localXY(q, o);
+  let nearestD = Infinity;
+  for(const a of avoids){
+    const d = minDistToPoly(p, a);
+    if(d < nearestD) nearestD = d;
+  }
+  return nearestD;
+}
+
+// Only for stations truly next to no-spray — not mid-zone heads.
+// Mid-zone keeps full circle; edge heads get a limited arc aimed into the lawn.
 function edgeAimAdvice(q, o, poly, avoids, radiusM){
   if(!avoids.length) return null;
   const p = localXY(q, o);
@@ -709,28 +722,26 @@ function edgeAimAdvice(q, o, poly, avoids, radiusM){
     const d = minDistToPoly(p, a);
     if(d < nearestD){ nearestD = d; nearest = a; }
   }
-  if(!nearest || nearestD > radiusM * 0.95) return null; // not close enough to matter
+  // Only flag when the head is close to the red edge (within ~40% of throw radius)
+  if(!nearest || nearestD > radiusM * 0.4) return null;
 
-  // Centroid of nearest no-spray
   const cx = nearest.reduce((s,v)=>s+v.x,0)/nearest.length;
   const cy = nearest.reduce((s,v)=>s+v.y,0)/nearest.length;
   const noSprayLL = ll({x:cx, y:cy}, o);
+  const aim = (bearingDeg(q, noSprayLL) + 180) % 360;
 
-  // Aim opposite of no-spray (into the lawn)
-  let aim = (bearingDeg(q, noSprayLL) + 180) % 360;
-
-  // Suggested arc: tighter when very close to no-spray
-  let arc = 180;
-  if(nearestD < radiusM * 0.35) arc = 90;
-  else if(nearestD < radiusM * 0.6) arc = 120;
-  else arc = 180;
+  // Tighter arc the closer you are to the red boundary
+  let arc = 120;
+  if(nearestD < radiusM * 0.2) arc = 90;
+  else if(nearestD < radiusM * 0.3) arc = 120;
+  else arc = 150;
 
   return {
     aimDeg: aim,
     aimLabel: compassLabel(aim),
     arc,
     distFt: Math.round(mToFt(nearestD)),
-    note: `Aim ~${compassLabel(aim)}, limit sweep to about ${arc}° so spray stays on the lawn and off the no-spray area (~${Math.round(mToFt(nearestD))} ft away).`
+    note: `Edge station — aim ~${compassLabel(aim)}, set about ${arc}° sweep so water stays on the lawn (no-spray is ~${Math.round(mToFt(nearestD))} ft away).`
   };
 }
 
@@ -785,6 +796,9 @@ function generateLayout(){
   }
 
   const max = $('inventoryOnly').checked ? item.qty : 500;
+  const rM = item.pattern === 'rectangle' ? Math.max(sx, sy) : ftToM(item.radius || 35);
+  // Keep primary grid stations away from the red edge when possible
+  const edgeBuffer = rM * 0.35;
   let row = 0;
   for(let y = minY; y <= maxY && sprinklers.length < max; y += sy){
     const off = (row++ % 2) * (sx / 2);
@@ -792,6 +806,8 @@ function generateLayout(){
       const q = ll({x, y}, o);
       if(!candidateAllowed(q, o, poly, avoids, item)) continue;
       if(sprinklers.some(s => dist(s.position, q) < sx * 0.45)) continue;
+      // Prefer not to plant the main grid against the no-spray boundary
+      if(avoids.length && distToNearestNoSpray(q, o, avoids) < edgeBuffer) continue;
       sprinklers.push(makeSprinkler(item, q, o, poly, avoids));
     }
   }
@@ -806,31 +822,28 @@ function generateLayout(){
       const cov = sampleCoverage();
       if(cov && cov.coverage >= 99.2) break;
 
-      let best = null;
-      // Prefer boundary vertices that are still dry (catches thin arms / corners)
-      for(const v of poly){
-        const q = ll(v, o);
-        if(!candidateAllowed(q, o, poly, avoids, item)) continue;
-        if(sprinklers.some(s => dist(s.position, q) < minSep)) continue;
-        if(sprinklers.some(s => pointCovered(q, s))) continue;
-        best = q;
-        break;
-      }
-      if(!best){
-        for(let y = minY; y <= maxY; y += step){
-          for(let x = minX; x <= maxX; x += step){
-            const p = {x, y};
-            if(!pip(p, poly)) continue;
-            if(avoids.some(a => pip(p, a))) continue;
-            const q = ll(p, o);
-            if(!candidateAllowed(q, o, poly, avoids, item)) continue;
-            if(sprinklers.some(s => dist(s.position, q) < minSep)) continue;
-            if(sprinklers.some(s => pointCovered(q, s))) continue;
-            best = q;
-            break;
-          }
-          if(best) break;
+      let best = null, bestScore = -Infinity;
+      const consider = (q) => {
+        if(!candidateAllowed(q, o, poly, avoids, item)) return;
+        if(sprinklers.some(s => dist(s.position, q) < minSep)) return;
+        if(sprinklers.some(s => pointCovered(q, s))) return;
+        // Prefer dry spots that stay farther from the red no-spray edge
+        const dNo = distToNearestNoSpray(q, o, avoids);
+        const score = dNo; // higher = better (deeper into the lawn)
+        if(score > bestScore){ bestScore = score; best = q; }
+      };
+      // Sample interior first (not only boundary vertices, which hug edges)
+      for(let y = minY; y <= maxY; y += step){
+        for(let x = minX; x <= maxX; x += step){
+          const p = {x, y};
+          if(!pip(p, poly)) continue;
+          if(avoids.some(a => pip(p, a))) continue;
+          consider(ll(p, o));
         }
+      }
+      // Then vertices if still needed for odd corners
+      if(!best){
+        for(const v of poly) consider(ll(v, o));
       }
       if(!best) break;
       sprinklers.push(makeSprinkler(item, best, o, poly, avoids));
@@ -1460,7 +1473,7 @@ if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
 if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=20;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=21;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 if($('appVersion')) $('appVersion').textContent = 'v' + APP_VERSION;
 
