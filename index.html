@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=11" />
   <style>
     .vertex-num {
       width: 22px;
@@ -160,14 +160,23 @@
 
         <hr />
         <h3 class="subhead">Record perimeter</h3>
+        <p class="help">Phone: walk with GPS. Desktop: use click or freehand below.</p>
         <div class="row">
-          <button id="startWalkBtn">Start walking</button>
+          <button id="startWalkBtn">Start walking (GPS)</button>
           <button id="pauseWalkBtn" disabled>Pause</button>
         </div>
         <div class="row">
           <button id="addPointBtn" class="secondary">Add averaged GPS point</button>
           <button id="finishWalkBtn" disabled>Finish boundary</button>
         </div>
+
+        <div class="draw-modes">
+          <span class="draw-label">Desktop draw:</span>
+          <button id="drawClickBtn" class="secondary">Click points</button>
+          <button id="drawFreehandBtn" class="secondary">Freehand drag</button>
+          <button id="drawOffBtn" class="secondary">Off</button>
+        </div>
+
         <div class="row">
           <button id="smoothBtn" class="secondary">Smooth display</button>
           <button id="editBtn" class="secondary">Edit points</button>
@@ -298,22 +307,30 @@
 
         <div id="deployActive" class="hidden">
           <div class="target-card">
-            <span id="deployProgress">Sprinkler 1 of 1</span>
+            <span id="deployProgress">0 of 0 satisfied</span>
             <strong id="deployDistance">Waiting for GPS…</strong>
-            <div id="deployDirection">Walk toward the highlighted sprinkler</div>
+            <div id="deployDirection">Walk toward the highlighted sprinkler — or tap any marker to mark it done</div>
+          </div>
+          <div id="cycleCompleteBanner" class="notice hidden" style="background:#e6f7ec;color:#145b32;border:1px solid #a8d5b5;">
+            All positions satisfied. Cycle complete.
+            <button id="resetCycleBtn" style="margin-top:8px;width:100%;">Reset cycle — ready for next watering</button>
           </div>
           <div class="row">
-            <button id="placedBtn">Placed</button>
+            <button id="placedBtn">Mark current placed</button>
             <button id="skipBtn" class="secondary">Skip</button>
           </div>
           <div class="row">
             <button id="previousBtn" class="secondary">Previous</button>
             <button id="endDeployBtn" class="danger">End setup</button>
           </div>
+          <div class="row one">
+            <button id="resetCycleBtn2" class="secondary">Reset all satisfied</button>
+          </div>
           <label class="check">
             <input type="checkbox" id="voiceGuidance" checked />
             Speak distance and arrival guidance
           </label>
+          <p class="help">Tip: Tap any numbered sprinkler marker on the map to toggle it satisfied / pending for this watering cycle.</p>
         </div>
       </div>
     </div>
@@ -335,6 +352,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

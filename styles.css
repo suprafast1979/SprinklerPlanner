@@ -237,3 +237,39 @@ button.full {
   color: #607066;
   font-size: 0.9rem;
 }
+
+/* Done / satisfied sprinkler markers */
+.sprinkler-label.done {
+  background: #1b9b50 !important;
+  box-shadow: 0 0 0 3px #fff, 0 0 8px #1b9b50;
+}
+.sprinkler-label.done div {
+  font-size: 14px;
+}
+
+/* Desktop draw mode buttons */
+.draw-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 10px 0;
+  padding: 10px;
+  background: #f0f6f1;
+  border-radius: 8px;
+}
+.draw-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #176b3a;
+  width: 100%;
+  margin-bottom: 2px;
+}
+.draw-modes button.active {
+  background: #176b3a;
+  color: white;
+}
+
+/* Slightly tighter wizard steps */
+.wizard-step .row { margin-bottom: 8px; }
+.wizard-step .help { margin: 6px 0 10px; }

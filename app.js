@@ -1,8 +1,12 @@
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
-const map=L.map('map').setView([44.05,-123.1],17);
-const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:20,attribution:'&copy; OpenStreetMap'});
-const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20,attribution:'Tiles &copy; Esri'}).addTo(map);
-L.control.layers({Satellite:imagery,Streets:street}).addTo(map);
+const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
+const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:22, maxNativeZoom:19, attribution:'&copy; OpenStreetMap'
+});
+const imagery=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+  maxZoom:22, maxNativeZoom:19, attribution:'Tiles &copy; Esri'
+}).addTo(map);
+L.control.layers({Satellite:imagery, Streets:street}).addTo(map);
 
 // ============================================================
 // CLOUD CONFIG – paste your Supabase values here
@@ -17,6 +21,8 @@ let cloudEnabled = false;
 
 const STORE='sprinklerPlannerV5';
 let followUser=true,centerOnNextFix=true,userMovedMap=false,currentMode='planner',deployIndex=0,deployed=new Set(),deployZone=null,lastSpokenDistance=null;
+// Desktop drawing modes: 'none' | 'click' (sequential points) | 'freehand'
+let drawMode='none', freehandDrawing=false, freehandPoints=[];
 const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
 const ftToM=ft=>Number(ft)*.3048, mToFt=m=>m/.3048;
 function dist(a,b){const R=6371000,p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dp=(b.lat-a.lat)*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180,h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
@@ -227,9 +233,40 @@ function renderBoundary(){
   updateMetrics();
 }
 function renderAvoid(){avoidLayers.forEach(removeLayer);avoidLayers=[];noSpray.forEach(a=>avoidLayers.push(L.polygon(a.points,{color:'#b33838',fillColor:'#d74b4b',fillOpacity:.32,weight:3}).bindTooltip(a.name).addTo(map)));removeLayer(currentAvoidLine);if(currentAvoid.length)currentAvoidLine=L.polyline(currentAvoid,{color:'#d54b4b',dashArray:'6,6',weight:3}).addTo(map);$('avoidCount').textContent=noSpray.length;$('avoidDrawing').textContent=drawingAvoid?'Yes':'No'}
-function coverageLayer(s,i){const pos=s.position,label=`<div>${i+1}</div>`;if(s.pattern==='rectangle'){const o=pos,halfW=s.width/2,halfL=s.length/2,pts=[ll({x:-halfW,y:-halfL},o),ll({x:halfW,y:-halfL},o),ll({x:halfW,y:halfL},o),ll({x:-halfW,y:halfL},o)];const poly=L.polygon(pts,{color:'#1976c8',fillOpacity:.14,weight:2}).addTo(map);return [poly,L.marker(pos,{icon:L.divIcon({className:'sprinkler-label',html:label,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(map)]}
-const circle=L.circle(pos,{radius:s.radius,color:'#1976c8',fillOpacity:.12,weight:2}).addTo(map);return[circle,L.marker(pos,{icon:L.divIcon({className:'sprinkler-label',html:label,iconSize:[28,28],iconAnchor:[14,14]})}).addTo(map)]}
-function renderSprinklers(){sprinklerLayers.flat().forEach(removeLayer);sprinklerLayers=[];sprinklers.forEach((s,i)=>sprinklerLayers.push(coverageLayer(s,i)));updateCoverage()}
+function coverageLayer(s,i){
+  const pos = s.position;
+  const isDone = deployed.has(i);
+  const labelClass = isDone ? 'sprinkler-label done' : 'sprinkler-label';
+  const label = `<div>${isDone ? '✓' : (i+1)}</div>`;
+  const coverColor = isDone ? '#1b9b50' : '#1976c8';
+  let coverLayer;
+  if(s.pattern === 'rectangle'){
+    const o = pos, halfW = s.width/2, halfL = s.length/2;
+    const pts = [ll({x:-halfW,y:-halfL},o), ll({x:halfW,y:-halfL},o), ll({x:halfW,y:halfL},o), ll({x:-halfW,y:halfL},o)];
+    coverLayer = L.polygon(pts, {color:coverColor, fillOpacity:.14, weight:2}).addTo(map);
+  } else {
+    coverLayer = L.circle(pos, {radius:s.radius, color:coverColor, fillOpacity:.12, weight:2}).addTo(map);
+  }
+  const marker = L.marker(pos, {
+    icon: L.divIcon({ className: labelClass, html: label, iconSize:[28,28], iconAnchor:[14,14] }),
+    interactive: true
+  }).addTo(map);
+  // Tap marker to mark satisfied during deploy / any time
+  marker.on('click', (ev) => {
+    L.DomEvent.stopPropagation(ev);
+    if(currentMode === 'deploy' || sprinklers.length){
+      toggleSprinklerDone(i);
+    }
+  });
+  return [coverLayer, marker];
+}
+function renderSprinklers(){
+  sprinklerLayers.flat().forEach(removeLayer);
+  sprinklerLayers = [];
+  sprinklers.forEach((s,i) => sprinklerLayers.push(coverageLayer(s,i)));
+  updateCoverage();
+  updateDeployProgressUI();
+}
 function renderAll(){renderBoundary();renderAvoid();renderSprinklers();updateButtons()}
 function updateButtons(){$('pauseWalkBtn').disabled=!walking;$('finishWalkBtn').disabled=!walking||boundary.length<3;$('pauseWalkBtn').textContent=paused?'Resume':'Pause';$('finishAvoidBtn').disabled=!drawingAvoid||currentAvoid.length<3;$('editBtn').textContent=editMode?'Done editing':'Edit points'}
 function updateMetrics(){$('pointCount').textContent=boundary.length;const a=area(displayBoundary());$('areaValue').textContent=a?`${Math.round(a*10.7639).toLocaleString()} sq ft`:'—';$('activeZoneLabel').textContent=$('zoneName').value||'Unnamed'}
@@ -253,7 +290,7 @@ function startGPS(center=false){
   },{enableHighAccuracy:true,maximumAge:0,timeout:12000})
   if(center&&currentPosition)centerMapOnUser();
 }
-function centerMapOnUser(){if(!currentPosition)return;map.setView(currentPosition,19);centerOnNextFix=false;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
+function centerMapOnUser(){if(!currentPosition)return;map.setView(currentPosition, Math.min(20, map.getZoom() < 18 ? 19 : map.getZoom()));centerOnNextFix=false;followUser=true;userMovedMap=false;$('resumeFollowBtn').classList.add('hidden')}
 function handleGPS(pos){
   const p={lat:pos.coords.latitude,lng:pos.coords.longitude,accuracy:pos.coords.accuracy,t:pos.timestamp};currentPosition=p;
   const accFt=Math.round(mToFt(p.accuracy));
@@ -851,11 +888,127 @@ $('deleteZoneBtn').onclick=()=>{const p=activeProject(),id=$('zoneSelect').value
 $('exportBtn').onclick=()=>{const p=activeProject();const blob=new Blob([JSON.stringify({version:5,project:p,inventory:state.inventory},null,2)],{type:'application/json'}),a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=`${p.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase()}.json`;a.click();URL.revokeObjectURL(url)};
 $('importInput').onchange=async e=>{try{const data=JSON.parse(await e.target.files[0].text()),p=data.project||data;if(!Array.isArray(p.zones))throw Error('Invalid project');p.id=p.id||uid();state.projects.push(p);state.activeProjectId=p.id;if(Array.isArray(data.inventory))state.inventory=data.inventory;resetZone();save();refreshSelectors();setStatus('Project imported')}catch(err){setStatus(`Import failed: ${err.message}`)}};
 $('zoneName').oninput=updateMetrics;
-map.on('click',e=>{if(drawingAvoid){currentAvoid.push(e.latlng);renderAvoid();updateButtons();return}if(addVertexMode){boundary.push(e.latlng);smooth=[];renderBoundary();return}if(removeVertexMode&&boundary.length){let best=0,bd=Infinity;boundary.forEach((p,i)=>{const d=dist(p,e.latlng);if(d<bd){bd=d;best=i}});if(bd<15){boundary.splice(best,1);smooth=[];renderBoundary()}return}if(walking&&!paused){boundary.push(e.latlng);smooth=[];renderBoundary()}});
+
+// ===== Desktop / mouse boundary drawing =====
+function setDrawMode(mode){
+  drawMode = mode;
+  freehandDrawing = false;
+  freehandPoints = [];
+  // Update button states if present
+  const clickBtn = $('drawClickBtn');
+  const freeBtn = $('drawFreehandBtn');
+  const offBtn = $('drawOffBtn');
+  if(clickBtn) clickBtn.classList.toggle('active', mode==='click');
+  if(freeBtn) freeBtn.classList.toggle('active', mode==='freehand');
+  if(offBtn) offBtn.classList.toggle('active', mode==='none');
+  if(mode==='click') setStatus('Click points around the perimeter — lines connect automatically');
+  else if(mode==='freehand') setStatus('Click and drag to freehand-draw the perimeter');
+  else setStatus('Drawing mode off');
+  // Disable map dragging while freehand drawing
+  if(mode==='freehand') map.dragging.disable();
+  else map.dragging.enable();
+}
+
+if($('drawClickBtn')) $('drawClickBtn').onclick = () => setDrawMode(drawMode==='click' ? 'none' : 'click');
+if($('drawFreehandBtn')) $('drawFreehandBtn').onclick = () => setDrawMode(drawMode==='freehand' ? 'none' : 'freehand');
+if($('drawOffBtn')) $('drawOffBtn').onclick = () => setDrawMode('none');
+
+map.on('click', e => {
+  if(drawingAvoid){
+    currentAvoid.push(e.latlng); renderAvoid(); updateButtons(); return;
+  }
+  if(addVertexMode){
+    boundary.push(e.latlng); smooth=[]; renderBoundary(); return;
+  }
+  if(removeVertexMode && boundary.length){
+    let best=0, bd=Infinity;
+    boundary.forEach((p,i)=>{ const d=dist(p,e.latlng); if(d<bd){bd=d;best=i;} });
+    if(bd<15){ boundary.splice(best,1); smooth=[]; renderBoundary(); }
+    return;
+  }
+  // Sequential click-to-place points
+  if(drawMode==='click'){
+    boundary.push(e.latlng); smooth=[]; renderBoundary();
+    setStatus(`Point ${boundary.length} placed — keep clicking or Finish boundary`);
+    return;
+  }
+  if(walking && !paused){
+    boundary.push(e.latlng); smooth=[]; renderBoundary();
+  }
+});
+
+// Freehand: mousedown → mousemove → mouseup
+map.on('mousedown', e => {
+  if(drawMode !== 'freehand' || drawingAvoid) return;
+  freehandDrawing = true;
+  freehandPoints = [e.latlng];
+  map.dragging.disable();
+});
+map.on('mousemove', e => {
+  if(!freehandDrawing || drawMode !== 'freehand') return;
+  const last = freehandPoints[freehandPoints.length-1];
+  if(last && dist(last, e.latlng) < 1.2) return; // throttle points
+  freehandPoints.push(e.latlng);
+  // Live preview line
+  if(window._freehandLine) map.removeLayer(window._freehandLine);
+  window._freehandLine = L.polyline(freehandPoints, {color:'#176b3a', weight:3, dashArray:'4,6'}).addTo(map);
+});
+map.on('mouseup', e => {
+  if(!freehandDrawing || drawMode !== 'freehand') return;
+  freehandDrawing = false;
+  if(window._freehandLine){ map.removeLayer(window._freehandLine); window._freehandLine=null; }
+  if(freehandPoints.length >= 2){
+    // Append freehand stroke to boundary
+    freehandPoints.forEach(p => boundary.push(p));
+    smooth = [];
+    renderBoundary();
+    setStatus(`Freehand added — ${boundary.length} total points. Continue or Finish boundary.`);
+  }
+  freehandPoints = [];
+  map.dragging.enable();
+});
+// Also handle touch-end equivalent for mouse leaving map
+map.on('mouseout', () => {
+  if(freehandDrawing){
+    freehandDrawing = false;
+    if(window._freehandLine){ map.removeLayer(window._freehandLine); window._freehandLine=null; }
+    map.dragging.enable();
+  }
+});
 
 map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('resumeFollowBtn').classList.remove('hidden')}});
+
+// ===== Deploy: tap marker to mark satisfied =====
+function toggleSprinklerDone(idx){
+  if(deployed.has(idx)) deployed.delete(idx);
+  else deployed.add(idx);
+  renderSprinklers();
+  updateDeployProgressUI();
+  if(deployed.size >= sprinklers.length && sprinklers.length > 0){
+    setStatus('All positions satisfied — cycle complete. Ready to reset.');
+    if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.remove('hidden');
+  } else {
+    if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.add('hidden');
+  }
+}
+function updateDeployProgressUI(){
+  const total = sprinklers.length;
+  const done = deployed.size;
+  if($('deployProgress')) $('deployProgress').textContent = total ? `${done} of ${total} satisfied` : 'No sprinklers';
+  if($('resetCycleBtn')) $('resetCycleBtn').disabled = done === 0;
+}
+function resetWateringCycle(){
+  deployed = new Set();
+  renderSprinklers();
+  updateDeployProgressUI();
+  if($('cycleCompleteBanner')) $('cycleCompleteBanner').classList.add('hidden');
+  setStatus('Watering cycle reset — ready to go again');
+}
+if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
+if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
+
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=10;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=11;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 
 // Auth button
