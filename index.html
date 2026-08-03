@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=7" />
+  <link rel="stylesheet" href="styles.css?v=10" />
   <style>
     .vertex-num {
       width: 22px;
@@ -43,15 +43,18 @@
     <div id="map"></div>
 
     <div class="panel" id="plannerPanel">
-      <div class="tabs">
-        <button class="tab active" data-tab="projects">Projects</button>
-        <button class="tab" data-tab="zone">Zone</button>
-        <button class="tab" data-tab="avoid">No-spray</button>
-        <button class="tab" data-tab="inventory">Inventory</button>
-        <button class="tab" data-tab="layout">Layout</button>
+      <!-- Wizard progress -->
+      <div class="wizard-progress">
+        <button class="wiz-step active" data-step="project">1. Project</button>
+        <button class="wiz-step" data-step="zones">2. Zones</button>
+        <button class="wiz-step" data-step="layout">3. Layout</button>
       </div>
 
-      <div id="projectsTab" class="tabbody active">
+      <!-- ========== STEP 1: PROJECT ========== -->
+      <div id="stepProject" class="wizard-step active">
+        <h2 class="step-title">Project</h2>
+        <p class="step-desc">Choose or create the property you’re working on.</p>
+
         <label>Select project
           <select id="projectSelect"></select>
         </label>
@@ -66,92 +69,28 @@
           <button id="renameProjectBtn" class="secondary">Rename</button>
           <button id="deleteProjectBtn" class="danger">Delete project</button>
         </div>
-        <hr />
-        <label>Select zone
-          <select id="zoneSelect"></select>
-        </label>
-        <label>Zone name
-          <input id="zoneName" placeholder="Yard, pasture, orchard…" />
-        </label>
-        <div class="row">
-          <button id="newZoneBtn">New zone</button>
-          <button id="saveZoneBtn">Save zone</button>
-        </div>
-        <div class="row">
-          <button id="loadZoneBtn" class="secondary">Load zone</button>
-          <button id="deleteZoneBtn" class="danger">Delete zone</button>
-        </div>
+
         <div class="row">
           <button id="exportBtn" class="secondary">Export project</button>
           <label class="fileLabel secondary">Import project
             <input type="file" id="importInput" accept=".json" />
           </label>
         </div>
-        <p class="help">Projects hold multiple zones (yard, pasture, orchard, etc.). Sign in (top right) to sync across devices. Export / Import still works as a backup or for sharing a single project.</p>
-      </div>
 
-      <div id="zoneTab" class="tabbody">
-        <div class="row">
-          <button id="startWalkBtn">Start walking perimeter</button>
-          <button id="pauseWalkBtn" disabled>Pause</button>
-        </div>
-        <div class="row">
-          <button id="addPointBtn" class="secondary">Add averaged GPS point</button>
-          <button id="finishWalkBtn" disabled>Finish boundary</button>
-        </div>
-        <div class="row">
-          <button id="smoothBtn" class="secondary">Smooth display</button>
-          <button id="editBtn" class="secondary">Edit points</button>
-        </div>
-        <div class="row">
-          <button id="addVertexBtn" class="secondary">Add point by tapping</button>
-          <button id="removeVertexBtn" class="secondary">Remove point by tapping</button>
-        </div>
-        <div class="row one">
-          <button id="clearBoundaryBtn" class="danger">Clear current zone</button>
-        </div>
+        <hr />
+        <button id="goInventoryBtn" class="secondary full">Manage Inventory</button>
+        <p class="help">Inventory is shared across all projects. You can also jump here anytime with the search button.</p>
 
-        <label>Maximum accepted GPS accuracy
-          <select id="accuracyLimit">
-            <option value="3.05">10 ft</option>
-            <option value="4.88" selected>16 ft</option>
-            <option value="7.92">26 ft</option>
-            <option value="11.89">39 ft</option>
-          </select>
-        </label>
-
-        <p class="help">
-          The recorder now requires several good GPS readings, rejects big jumps, and will auto-pause + vibrate if the signal stays weak. Stop walking when it alerts you, wait for green accuracy, then Resume.
-        </p>
-
-        <div class="metrics">
-          <div><span>GPS accuracy</span><strong id="accuracy">—</strong></div>
-          <div><span>Recorded points</span><strong id="pointCount">0</strong></div>
-          <div><span>Area</span><strong id="areaValue">—</strong></div>
+        <div class="wizard-nav">
+          <button id="toZonesBtn" class="primary">Continue to Zones →</button>
         </div>
       </div>
 
-      <div id="avoidTab" class="tabbody">
-        <label>No-spray area name
-          <input id="avoidName" placeholder="Building, driveway, garden…" />
-        </label>
-        <div class="row">
-          <button id="drawAvoidBtn">Draw no-spray area</button>
-          <button id="finishAvoidBtn" disabled>Finish area</button>
-        </div>
-        <div class="row">
-          <button id="deleteAvoidBtn" class="secondary">Delete last area</button>
-          <button id="clearAvoidBtn" class="danger">Clear all</button>
-        </div>
-        <p class="help">Tap around buildings, pavement, gardens, or any area where water must not land.</p>
-        <div class="metrics">
-          <div><span>No-spray areas</span><strong id="avoidCount">0</strong></div>
-          <div><span>Drawing</span><strong id="avoidDrawing">No</strong></div>
-          <div><span>Active zone</span><strong id="activeZoneLabel">—</strong></div>
-        </div>
-      </div>
+      <!-- ========== INVENTORY (accessible from Project or Search) ========== -->
+      <div id="stepInventory" class="wizard-step">
+        <h2 class="step-title">Inventory</h2>
+        <p class="step-desc">Sprinklers you already own. These are used when optimizing layouts.</p>
 
-      <div id="inventoryTab" class="tabbody">
         <label>Sprinkler name
           <input id="invName" value="Generic impact" />
         </label>
@@ -193,9 +132,99 @@
           <button id="clearInventoryBtn" class="danger">Clear inventory</button>
         </div>
         <div id="inventoryList" class="list"></div>
+
+        <div class="wizard-nav">
+          <button id="backFromInventoryBtn" class="secondary">← Back</button>
+        </div>
       </div>
 
-      <div id="layoutTab" class="tabbody">
+      <!-- ========== STEP 2: ZONES ========== -->
+      <div id="stepZones" class="wizard-step">
+        <h2 class="step-title">Zones</h2>
+        <p class="step-desc">Walk the perimeter of each area you want to water.</p>
+
+        <label>Select zone
+          <select id="zoneSelect"></select>
+        </label>
+        <label>Zone name
+          <input id="zoneName" placeholder="Back yard, pasture, orchard…" />
+        </label>
+        <div class="row">
+          <button id="newZoneBtn">New zone</button>
+          <button id="saveZoneBtn">Save zone</button>
+        </div>
+        <div class="row">
+          <button id="loadZoneBtn" class="secondary">Load zone</button>
+          <button id="deleteZoneBtn" class="danger">Delete zone</button>
+        </div>
+
+        <hr />
+        <h3 class="subhead">Record perimeter</h3>
+        <div class="row">
+          <button id="startWalkBtn">Start walking</button>
+          <button id="pauseWalkBtn" disabled>Pause</button>
+        </div>
+        <div class="row">
+          <button id="addPointBtn" class="secondary">Add averaged GPS point</button>
+          <button id="finishWalkBtn" disabled>Finish boundary</button>
+        </div>
+        <div class="row">
+          <button id="smoothBtn" class="secondary">Smooth display</button>
+          <button id="editBtn" class="secondary">Edit points</button>
+        </div>
+        <div class="row">
+          <button id="addVertexBtn" class="secondary">Add point by tapping</button>
+          <button id="removeVertexBtn" class="secondary">Remove point by tapping</button>
+        </div>
+        <div class="row one">
+          <button id="clearBoundaryBtn" class="danger">Clear current zone</button>
+        </div>
+
+        <label>Maximum accepted GPS accuracy
+          <select id="accuracyLimit">
+            <option value="3.05">10 ft</option>
+            <option value="4.88" selected>16 ft</option>
+            <option value="7.92">26 ft</option>
+            <option value="11.89">39 ft</option>
+          </select>
+        </label>
+
+        <div class="metrics">
+          <div><span>GPS accuracy</span><strong id="accuracy">—</strong></div>
+          <div><span>Recorded points</span><strong id="pointCount">0</strong></div>
+          <div><span>Area</span><strong id="areaValue">—</strong></div>
+        </div>
+
+        <hr />
+        <h3 class="subhead">No-spray areas</h3>
+        <label>No-spray area name
+          <input id="avoidName" placeholder="Building, driveway, garden…" />
+        </label>
+        <div class="row">
+          <button id="drawAvoidBtn">Draw no-spray area</button>
+          <button id="finishAvoidBtn" disabled>Finish area</button>
+        </div>
+        <div class="row">
+          <button id="deleteAvoidBtn" class="secondary">Delete last area</button>
+          <button id="clearAvoidBtn" class="danger">Clear all</button>
+        </div>
+        <div class="metrics">
+          <div><span>No-spray areas</span><strong id="avoidCount">0</strong></div>
+          <div><span>Drawing</span><strong id="avoidDrawing">No</strong></div>
+          <div><span>Active zone</span><strong id="activeZoneLabel">—</strong></div>
+        </div>
+
+        <div class="wizard-nav">
+          <button id="backToProjectBtn" class="secondary">← Project</button>
+          <button id="finishZonesBtn" class="primary">Done with zones →</button>
+        </div>
+      </div>
+
+      <!-- ========== STEP 3: LAYOUT ========== -->
+      <div id="stepLayout" class="wizard-step">
+        <h2 class="step-title">Layout</h2>
+        <p class="step-desc">Place sprinklers using what you already own.</p>
+
         <label>Use sprinkler
           <select id="layoutSprinklerSelect"></select>
         </label>
@@ -225,9 +254,28 @@
           <div><span>Overlap score</span><strong id="overlapValue">—</strong></div>
           <div><span>Recommendation</span><strong id="recommendValue">—</strong></div>
         </div>
+
+        <!-- Smart AI-style purchase recommendations -->
+        <div id="smartRecPanel" class="smart-rec hidden">
+          <div class="smart-rec-header">
+            <span class="smart-badge">Smart Recommendation</span>
+            <h3 id="recTitle">Coverage gap detected</h3>
+          </div>
+          <p id="recSummary" class="rec-summary"></p>
+          <ul id="recReasons" class="rec-reasons"></ul>
+          <div class="rec-links-label">Suggested products (opens in new tab)</div>
+          <div id="recLinks" class="rec-links"></div>
+          <p class="help rec-disclaimer">Links are Amazon product searches matched to the gap in your layout. Prices and availability change.</p>
+        </div>
+
+        <div class="wizard-nav">
+          <button id="backToZonesBtn" class="secondary">← Zones</button>
+          <button id="goDeployBtn" class="primary">Go to Set Up →</button>
+        </div>
       </div>
     </div>
 
+    <!-- Deploy panel (unchanged) -->
     <div class="panel hidden" id="deployPanel">
       <div class="deploy-panel">
         <div class="deploy-head">
@@ -271,11 +319,22 @@
     </div>
   </main>
 
+  <!-- Floating controls -->
   <button id="floatingLocateBtn" class="floating-locate" title="Locate me">◎</button>
   <button id="resumeFollowBtn" class="resume-follow hidden">Resume following</button>
+  <button id="searchBtn" class="floating-search" title="Search / jump">⌕</button>
+
+  <!-- Smart Search overlay -->
+  <div id="searchOverlay" class="search-overlay hidden">
+    <div class="search-sheet">
+      <input id="searchInput" type="text" placeholder="Where do you want to go?" autocomplete="off" />
+      <div id="searchResults" class="search-results"></div>
+      <button id="closeSearchBtn" class="secondary full">Close</button>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

@@ -27,7 +27,7 @@ function area(points){if(points.length<3)return 0;const o=points[0],q=points.map
 function chaikin(points,it=2){if(points.length<3)return points.slice();let out=points.slice();for(let k=0;k<it;k++){const n=[];for(let i=0;i<out.length;i++){const a=out[i],b=out[(i+1)%out.length];n.push({lat:.75*a.lat+.25*b.lat,lng:.75*a.lng+.25*b.lng},{lat:.25*a.lat+.75*b.lat,lng:.25*a.lng+.75*b.lng})}out=n}return out}
 function centroid(points){const o=points[0],q=points.map(p=>localXY(p,o));return ll({x:q.reduce((s,p)=>s+p.x,0)/q.length,y:q.reduce((s,p)=>s+p.y,0)/q.length},o)}
 
-let state={version:8,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
+let state={version:9,activeProjectId:null,activeZoneId:null,projects:[],inventory:[]};
 let boundary=[],smooth=[],noSpray=[],sprinklers=[],currentAvoid=[];
 let walking=false,paused=false,drawingAvoid=false,editMode=false,addVertexMode=false,removeVertexMode=false;
 let watchId=null,currentPosition=null,gpsSamples=[];
@@ -35,7 +35,7 @@ let poorFixStart=null; // timestamp when accuracy first went bad while walking
 let userMarker,accuracyCircle,boundaryLine,boundaryPoly,currentAvoidLine;
 let avoidLayers=[],vertexMarkers=[],sprinklerLayers=[];
 
-function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:8,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
+function defaultState(){const p={id:uid(),name:'Home',zones:[]};return{version:9,activeProjectId:p.id,activeZoneId:null,projects:[p],inventory:[{id:uid(),name:'Generic impact',qty:4,pattern:'circle',radius:35,angle:360,length:0,width:0}]}}
 
 // ---------- Cloud / Auth helpers ----------
 function initCloud(){
@@ -188,8 +188,8 @@ function save(){
 function activeProject(){return state.projects.find(p=>p.id===state.activeProjectId)}
 function activeZone(){return activeProject()?.zones.find(z=>z.id===state.activeZoneId)}
 function zoneObject(){return{id:state.activeZoneId||uid(),name:$('zoneName').value.trim()||'Unnamed zone',boundary,smooth,noSpray,sprinklers:sprinklers.map(s=>({...s,layer:undefined})),updated:new Date().toISOString()}}
-function loadZone(z){state.activeZoneId=z.id;boundary=(z.boundary||[]).map(p=>({...p}));smooth=(z.smooth||[]).map(p=>({...p}));noSpray=(z.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(z.sprinklers||[]).map(s=>({...s}));$('zoneName').value=z.name;walking=paused=drawingAvoid=editMode=addVertexMode=removeVertexMode=false;poorFixStart=null;renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});refreshSelectors();setStatus(`Loaded ${z.name}`)}
-function resetZone(){state.activeZoneId=null;boundary=[];smooth=[];noSpray=[];sprinklers=[];currentAvoid=[];$('zoneName').value='New zone';walking=paused=false;poorFixStart=null;renderAll();refreshSelectors();setStatus('New blank zone')}
+function loadZone(z){state.activeZoneId=z.id;boundary=(z.boundary||[]).map(p=>({...p}));smooth=(z.smooth||[]).map(p=>({...p}));noSpray=(z.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(z.sprinklers||[]).map(s=>({...s}));$('zoneName').value=z.name;walking=paused=drawingAvoid=editMode=addVertexMode=removeVertexMode=false;poorFixStart=null;renderAll();hideSmartRecommendations();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});refreshSelectors();setStatus(`Loaded ${z.name}`)}
+function resetZone(){state.activeZoneId=null;boundary=[];smooth=[];noSpray=[];sprinklers=[];currentAvoid=[];$('zoneName').value='New zone';walking=paused=false;poorFixStart=null;renderAll();hideSmartRecommendations();refreshSelectors();setStatus('New blank zone')}
 
 function displayBoundary(){return smooth.length?smooth:boundary}
 function removeLayer(x){if(x&&map.hasLayer(x))map.removeLayer(x)}
@@ -354,9 +354,233 @@ function addAveragedPoint(){
 
 function pointCovered(q,s){const p=localXY(q,s.position);if(s.pattern==='rectangle')return Math.abs(p.x)<=s.width/2&&Math.abs(p.y)<=s.length/2;return Math.hypot(p.x,p.y)<=s.radius}
 function sampleCoverage(){const zone=displayBoundary();if(zone.length<3||!sprinklers.length)return null;const o=zone[0],poly=zone.map(p=>localXY(p,o)),avoids=noSpray.map(a=>a.points.map(p=>localXY(p,o)));const xs=poly.map(p=>p.x),ys=poly.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);const step=Math.max(0.8,Math.min(2.2,Math.sqrt(area(zone))/120));let eligible=0,covered=0,multi=0,overspray=0,outside=0;for(let y=minY-step*2;y<=maxY+step*2;y+=step)for(let x=minX-step*2;x<=maxX+step*2;x+=step){const inside=pip({x,y},poly)&&!avoids.some(a=>pip({x,y},a));const q=ll({x,y},o);const count=sprinklers.reduce((n,s)=>n+(pointCovered(q,s)?1:0),0);if(inside){eligible++;if(count){covered++;if(count>1)multi++}}else if(count){outside++;overspray++}}return{coverage:eligible?covered/eligible*100:0,uncoveredSqFt:(eligible-covered)*step*step*10.7639,overlap:covered?multi/covered*100:0,overspray:outside?overspray/(outside+eligible)*100:0}}
-function updateCoverage(){const r=sampleCoverage();$('sprinklerCount').textContent=sprinklers.length;if(!r){['coverageValue','uncoveredValue','oversprayValue','overlapValue'].forEach(id=>$(id).textContent='—');return}$('coverageValue').textContent=`${r.coverage.toFixed(1)}%`;$('uncoveredValue').textContent=`${Math.round(r.uncoveredSqFt)} sq ft`;$('oversprayValue').textContent=`${r.overspray.toFixed(1)}%`;$('overlapValue').textContent=`${r.overlap.toFixed(0)}%`;$('recommendValue').textContent=r.coverage>=99?'Good':r.coverage>=95?'Minor adjustment':'Add or reposition'}
+function updateCoverage(){
+  const r=sampleCoverage();
+  $('sprinklerCount').textContent=sprinklers.length;
+  if(!r){
+    ['coverageValue','uncoveredValue','oversprayValue','overlapValue'].forEach(id=>$(id).textContent='—');
+    $('recommendValue').textContent='—';
+    hideSmartRecommendations();
+    return;
+  }
+  $('coverageValue').textContent=`${r.coverage.toFixed(1)}%`;
+  $('uncoveredValue').textContent=`${Math.round(r.uncoveredSqFt)} sq ft`;
+  $('oversprayValue').textContent=`${r.overspray.toFixed(1)}%`;
+  $('overlapValue').textContent=`${r.overlap.toFixed(0)}%`;
+  $('recommendValue').textContent=r.coverage>=99?'Good':r.coverage>=95?'Minor adjustment':'Add or reposition';
+}
+
 function candidateAllowed(q,o,poly,avoids){const p=localXY(q,o);return pip(p,poly)&&!avoids.some(a=>pip(p,a))}
-function generateLayout(){const zone=displayBoundary(),item=state.inventory.find(x=>x.id===$('layoutSprinklerSelect').value);if(zone.length<3)return setStatus('Finish a zone boundary first');if(!item)return setStatus('Add a sprinkler to inventory first');sprinklers=[];const o=zone[0],poly=zone.map(p=>localXY(p,o)),avoids=noSpray.map(a=>a.points.map(p=>localXY(p,o))),xs=poly.map(p=>p.x),ys=poly.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);const mode=$('priority').value;let sx,sy;if(item.pattern==='rectangle'){const f=mode==='water'?.95:mode==='coverage'?.65:.8;sx=ftToM(item.width)*f;sy=ftToM(item.length)*f}else{const r=ftToM(item.radius),f=mode==='water'?1.75:mode==='coverage'?1.15:1.42;sx=r*f;sy=sx*.866}const max=$('inventoryOnly').checked?item.qty:999;let row=0;for(let y=minY;y<=maxY&&sprinklers.length<max;y+=sy){const off=(row++%2)*sx/2;for(let x=minX+off;x<=maxX&&sprinklers.length<max;x+=sx){const q=ll({x,y},o);if(!candidateAllowed(q,o,poly,avoids))continue;sprinklers.push({inventoryId:item.id,name:item.name,pattern:item.pattern,position:q,radius:ftToM(item.radius||0),angle:item.angle||360,length:ftToM(item.length||0),width:ftToM(item.width||0)})}}if(!sprinklers.length){const c=centroid(zone);sprinklers.push({inventoryId:item.id,name:item.name,pattern:item.pattern,position:c,radius:ftToM(item.radius||0),angle:item.angle||360,length:ftToM(item.length||0),width:ftToM(item.width||0)})}renderSprinklers();const r=sampleCoverage();if(r&&r.coverage<98&&$('inventoryOnly').checked&&sprinklers.length>=item.qty)$('recommendValue').textContent='More units may help';setStatus(`Placed ${sprinklers.length} ${item.name}${sprinklers.length===1?'':'s'}`)}
+
+function hideSmartRecommendations(){
+  const panel=$('smartRecPanel');
+  if(panel) panel.classList.add('hidden');
+}
+
+function buildSmartRecommendations(r, item){
+  if(!r || !item || r.coverage >= 98) return null;
+
+  const zoneAreaSqFt = area(displayBoundary()) * 10.7639;
+  const radiusFt = Number(item.radius) || 35;
+  const pattern = item.pattern || 'circle';
+  const owned = Number(item.qty) || 0;
+  const placed = sprinklers.length;
+  const uncovered = r.uncoveredSqFt;
+  const gapPct = (100 - r.coverage).toFixed(1);
+
+  // Estimate extra units needed from actual performance of the current layout
+  let extraNeeded = 1;
+  if(placed > 0){
+    const avgCoveredPer = (zoneAreaSqFt * (r.coverage/100)) / placed;
+    extraNeeded = Math.ceil(uncovered / Math.max(avgCoveredPer * 0.82, 180));
+  } else {
+    const nominalArea = Math.PI * radiusFt * radiusFt * 0.55;
+    extraNeeded = Math.ceil(uncovered / Math.max(nominalArea, 200));
+  }
+  extraNeeded = Math.max(1, Math.min(extraNeeded, 14));
+
+  const reasons = [];
+  reasons.push(`You own ${owned} × “${item.name}”. The optimizer used all of them.`);
+  reasons.push(`≈ ${Math.round(uncovered).toLocaleString()} sq ft remains dry (${gapPct}% of the zone).`);
+  if(extraNeeded >= 1){
+    reasons.push(`About ${extraNeeded} more unit${extraNeeded===1?'':'s'} of similar capacity would close most of the gap.`);
+  }
+  if(r.overspray > 12){
+    reasons.push(`Current placement has noticeable overspray (${r.overspray.toFixed(0)}%). A different pattern or tighter spacing may help.`);
+  }
+
+  // Build 5 targeted product suggestions
+  const links = [];
+
+  // 1. More of the same type
+  links.push({
+    title: `More “${item.name}” (or equivalent)`,
+    subtitle: `Buy ~${extraNeeded} more • same ${radiusFt} ft class`,
+    query: `${item.name} ${radiusFt} ft radius sprinkler portable`
+  });
+
+  // 2. Larger / better impact
+  if(radiusFt < 42){
+    links.push({
+      title: 'Larger-radius impact sprinkler (40–50 ft)',
+      subtitle: 'Fewer heads needed for the same area',
+      query: 'impact sprinkler 40 ft 50 ft radius metal brass'
+    });
+  } else {
+    links.push({
+      title: 'Heavy-duty brass impact sprinkler',
+      subtitle: 'Durable head for consistent long throws',
+      query: 'brass impact sprinkler heavy duty full circle'
+    });
+  }
+
+  // 3. Pattern alternative
+  if(pattern === 'rectangle'){
+    links.push({
+      title: 'Full-circle or adjustable impact sprinkler',
+      subtitle: 'Better for open or irregular lawn shapes',
+      query: 'impact sprinkler adjustable arc full circle portable'
+    });
+  } else {
+    links.push({
+      title: 'Oscillating rectangular sprinkler',
+      subtitle: 'Excellent for long or rectangular zones',
+      query: 'oscillating sprinkler large coverage area metal'
+    });
+  }
+
+  // 4. Popular reliable brands
+  links.push({
+    title: 'Orbit / Rain Bird / Nelson portable',
+    subtitle: 'Highly rated, easy-to-find models',
+    query: 'Orbit impact sprinkler OR Rain Bird sprinkler OR Nelson sprinkler portable'
+  });
+
+  // 5. Current best overall
+  links.push({
+    title: 'Best portable sprinklers for large yards',
+    subtitle: 'Top-rated current options',
+    query: 'best portable lawn sprinkler large yard high coverage'
+  });
+
+  const title = r.coverage < 75 ? 'Significant coverage gap' :
+                r.coverage < 90 ? 'Coverage needs improvement' :
+                'Almost there — small gap remains';
+
+  const summary = `Your current inventory reaches ${r.coverage.toFixed(1)}% coverage. ` +
+    `Adding roughly ${extraNeeded} more similar sprinkler${extraNeeded===1?'':'s'} ` +
+    `(or a few higher-capacity units) would get this zone close to full coverage.`;
+
+  return { title, summary, reasons, links };
+}
+
+function renderSmartRecommendations(data){
+  const panel = $('smartRecPanel');
+  if(!panel) return;
+  if(!data){
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  $('recTitle').textContent = data.title;
+  $('recSummary').textContent = data.summary;
+
+  const ul = $('recReasons');
+  ul.innerHTML = data.reasons.map(r => `<li>${r}</li>`).join('');
+
+  const box = $('recLinks');
+  box.innerHTML = data.links.map(link => {
+    const url = `https://www.amazon.com/s?k=${encodeURIComponent(link.query)}`;
+    return `<a class="rec-link" href="${url}" target="_blank" rel="noopener noreferrer">
+      ${link.title}
+      <small>${link.subtitle}</small>
+    </a>`;
+  }).join('');
+}
+
+function generateLayout(){
+  const zone = displayBoundary();
+  const item = state.inventory.find(x => x.id === $('layoutSprinklerSelect').value);
+  if(zone.length < 3) return setStatus('Finish a zone boundary first');
+  if(!item) return setStatus('Add a sprinkler to inventory first');
+
+  sprinklers = [];
+  const o = zone[0];
+  const poly = zone.map(p => localXY(p, o));
+  const avoids = noSpray.map(a => a.points.map(p => localXY(p, o)));
+  const xs = poly.map(p => p.x), ys = poly.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const mode = $('priority').value;
+
+  let sx, sy;
+  if(item.pattern === 'rectangle'){
+    const f = mode === 'water' ? 0.95 : mode === 'coverage' ? 0.65 : 0.8;
+    sx = ftToM(item.width) * f;
+    sy = ftToM(item.length) * f;
+  } else {
+    const r = ftToM(item.radius);
+    const f = mode === 'water' ? 1.75 : mode === 'coverage' ? 1.15 : 1.42;
+    sx = r * f;
+    sy = sx * 0.866;
+  }
+
+  const max = $('inventoryOnly').checked ? item.qty : 999;
+  let row = 0;
+  for(let y = minY; y <= maxY && sprinklers.length < max; y += sy){
+    const off = (row++ % 2) * sx / 2;
+    for(let x = minX + off; x <= maxX && sprinklers.length < max; x += sx){
+      const q = ll({x, y}, o);
+      if(!candidateAllowed(q, o, poly, avoids)) continue;
+      sprinklers.push({
+        inventoryId: item.id,
+        name: item.name,
+        pattern: item.pattern,
+        position: q,
+        radius: ftToM(item.radius || 0),
+        angle: item.angle || 360,
+        length: ftToM(item.length || 0),
+        width: ftToM(item.width || 0)
+      });
+    }
+  }
+
+  if(!sprinklers.length){
+    const c = centroid(zone);
+    sprinklers.push({
+      inventoryId: item.id,
+      name: item.name,
+      pattern: item.pattern,
+      position: c,
+      radius: ftToM(item.radius || 0),
+      angle: item.angle || 360,
+      length: ftToM(item.length || 0),
+      width: ftToM(item.width || 0)
+    });
+  }
+
+  renderSprinklers();
+  const r = sampleCoverage();
+
+  // Update the simple recommendation label
+  if(r){
+    if(r.coverage >= 99) $('recommendValue').textContent = 'Good';
+    else if(r.coverage >= 95) $('recommendValue').textContent = 'Minor adjustment';
+    else if($('inventoryOnly').checked && sprinklers.length >= item.qty)
+      $('recommendValue').textContent = 'Need more units';
+    else $('recommendValue').textContent = 'Add or reposition';
+  }
+
+  // Smart AI-style purchase recommendations (only when inventory-constrained & incomplete)
+  if(r && $('inventoryOnly').checked && r.coverage < 98 && sprinklers.length >= item.qty){
+    const smart = buildSmartRecommendations(r, item);
+    renderSmartRecommendations(smart);
+  } else {
+    hideSmartRecommendations();
+  }
+
+  setStatus(`Placed ${sprinklers.length} ${item.name}${sprinklers.length === 1 ? '' : 's'}`);
+}
 
 
 function allSavedZones(){
@@ -422,15 +646,184 @@ function updateDeployGuidance(){
 }
 function nextDeploy(markPlaced){if(deployIndex>=sprinklers.length)return;if(markPlaced)deployed.add(deployIndex);deployIndex++;lastSpokenDistance=null;showDeployTarget()}
 
-// Tabs
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabbody').forEach(x=>x.classList.remove('active'));t.classList.add('active');$(`${t.dataset.tab}Tab`).classList.add('active');setTimeout(()=>map.invalidateSize(),80)});
-$('plannerModeBtn').onclick=()=>setMode('planner');$('deployModeBtn').onclick=()=>setMode('deploy');$('startDeployBtn').onclick=()=>beginDeployment(false);$('resumeDeployBtn').onclick=()=>beginDeployment(true);$('placedBtn').onclick=()=>nextDeploy(true);$('skipBtn').onclick=()=>nextDeploy(false);$('previousBtn').onclick=()=>{deployIndex=Math.max(0,deployIndex-1);lastSpokenDistance=null;showDeployTarget()};$('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};$('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
+// ========== WIZARD NAVIGATION ==========
+let currentWizardStep = 'project';
+
+function goToStep(step){
+  currentWizardStep = step;
+  // Hide all wizard steps
+  document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
+  // Show target
+  const mapStep = {
+    project: 'stepProject',
+    inventory: 'stepInventory',
+    zones: 'stepZones',
+    layout: 'stepLayout'
+  };
+  const el = $(mapStep[step]);
+  if(el) el.classList.add('active');
+
+  // Update progress indicators
+  document.querySelectorAll('.wiz-step').forEach(btn => {
+    btn.classList.remove('active', 'done');
+    const s = btn.dataset.step;
+    if(s === step) btn.classList.add('active');
+    else if((s === 'project' && step !== 'project') ||
+            (s === 'zones' && step === 'layout')) btn.classList.add('done');
+  });
+
+  setTimeout(() => map.invalidateSize(), 80);
+  setStatus(step === 'project' ? 'Project' :
+            step === 'zones' ? 'Zones – walk perimeters' :
+            step === 'layout' ? 'Layout – optimize sprinklers' :
+            step === 'inventory' ? 'Inventory' : '');
+}
+
+// Wizard nav buttons
+if($('toZonesBtn')) $('toZonesBtn').onclick = () => goToStep('zones');
+if($('backToProjectBtn')) $('backToProjectBtn').onclick = () => goToStep('project');
+if($('finishZonesBtn')) $('finishZonesBtn').onclick = () => {
+  // Soft prompt: if they have zones, continue; otherwise remind
+  const p = activeProject();
+  if(!p?.zones?.length && boundary.length < 3){
+    setStatus('Save at least one zone (or finish a boundary) before continuing');
+    return;
+  }
+  // Auto-save current zone if it has a boundary
+  if(boundary.length >= 3){
+    const z = zoneObject();
+    const i = p.zones.findIndex(x => x.id === z.id);
+    if(i >= 0) p.zones[i] = z; else p.zones.push(z);
+    state.activeZoneId = z.id;
+    save();
+    refreshSelectors();
+  }
+  goToStep('layout');
+};
+if($('backToZonesBtn')) $('backToZonesBtn').onclick = () => goToStep('zones');
+if($('goDeployBtn')) $('goDeployBtn').onclick = () => setMode('deploy');
+if($('goInventoryBtn')) $('goInventoryBtn').onclick = () => goToStep('inventory');
+if($('backFromInventoryBtn')) $('backFromInventoryBtn').onclick = () => goToStep('project');
+
+// Progress step clicks
+document.querySelectorAll('.wiz-step').forEach(btn => {
+  btn.onclick = () => goToStep(btn.dataset.step);
+});
+
+// ========== SMART SEARCH ==========
+const SEARCH_INTENTS = [
+  { keywords: ['project', 'projects', 'new project', 'select project'], label: 'Go to Projects', action: () => { setMode('planner'); goToStep('project'); } },
+  { keywords: ['zone', 'zones', 'new zone', 'walk', 'perimeter', 'boundary', 'record'], label: 'Go to Zones', action: () => { setMode('planner'); goToStep('zones'); } },
+  { keywords: ['layout', 'optimize', 'sprinkler layout', 'coverage', 'place sprinklers'], label: 'Go to Layout', action: () => { setMode('planner'); goToStep('layout'); } },
+  { keywords: ['inventory', 'sprinklers i own', 'add sprinkler', 'my sprinklers'], label: 'Manage Inventory', action: () => { setMode('planner'); goToStep('inventory'); } },
+  { keywords: ['deploy', 'set up', 'setup', 'field setup', 'place in field'], label: 'Go to Set Up / Deploy', action: () => setMode('deploy') },
+  { keywords: ['import', 'import project'], label: 'Import a project', action: () => { setMode('planner'); goToStep('project'); setTimeout(() => $('importInput')?.click(), 200); } },
+  { keywords: ['export', 'export project'], label: 'Export current project', action: () => { setMode('planner'); goToStep('project'); setTimeout(() => $('exportBtn')?.click(), 200); } },
+  { keywords: ['start walking', 'start recording', 'walk perimeter'], label: 'Start walking perimeter', action: () => { setMode('planner'); goToStep('zones'); setTimeout(() => $('startWalkBtn')?.click(), 200); } },
+  { keywords: ['no spray', 'no-spray', 'avoid', 'keep dry'], label: 'No-spray areas', action: () => { setMode('planner'); goToStep('zones'); } },
+  { keywords: ['locate', 'my location', 'center map', 'gps'], label: 'Center map on me', action: () => startGPS(true) },
+];
+
+function openSearch(){
+  $('searchOverlay')?.classList.remove('hidden');
+  const input = $('searchInput');
+  if(input){
+    input.value = '';
+    input.focus();
+    renderSearchResults('');
+  }
+}
+function closeSearch(){
+  $('searchOverlay')?.classList.add('hidden');
+}
+function renderSearchResults(query){
+  const box = $('searchResults');
+  if(!box) return;
+  const q = (query || '').toLowerCase().trim();
+  let matches = SEARCH_INTENTS;
+  if(q){
+    matches = SEARCH_INTENTS.filter(intent =>
+      intent.keywords.some(k => k.includes(q) || q.includes(k)) ||
+      intent.label.toLowerCase().includes(q)
+    );
+  }
+  if(!matches.length){
+    box.innerHTML = '<div class="search-empty">No matching actions. Try “zones”, “layout”, “inventory”, “deploy”…</div>';
+    return;
+  }
+  box.innerHTML = matches.map((intent, i) =>
+    `<button class="search-result" data-idx="${i}">
+      ${intent.label}
+      <small>${intent.keywords.slice(0,3).join(' · ')}</small>
+    </button>`
+  ).join('');
+  box.querySelectorAll('.search-result').forEach(btn => {
+    btn.onclick = () => {
+      const intent = matches[Number(btn.dataset.idx)];
+      closeSearch();
+      intent.action();
+    };
+  });
+}
+
+if($('searchBtn')) $('searchBtn').onclick = openSearch;
+if($('closeSearchBtn')) $('closeSearchBtn').onclick = closeSearch;
+if($('searchInput')){
+  $('searchInput').oninput = e => renderSearchResults(e.target.value);
+  $('searchInput').onkeydown = e => {
+    if(e.key === 'Escape') closeSearch();
+    if(e.key === 'Enter'){
+      const first = $('searchResults')?.querySelector('.search-result');
+      if(first) first.click();
+    }
+  };
+}
+// Close search when tapping the dimmed background
+if($('searchOverlay')){
+  $('searchOverlay').onclick = e => {
+    if(e.target === $('searchOverlay')) closeSearch();
+  };
+}
+
+// ========== EXISTING CONTROLS ==========
+$('plannerModeBtn').onclick=()=>setMode('planner');
+$('deployModeBtn').onclick=()=>setMode('deploy');
+$('startDeployBtn').onclick=()=>beginDeployment(false);
+$('resumeDeployBtn').onclick=()=>beginDeployment(true);
+$('placedBtn').onclick=()=>nextDeploy(true);
+$('skipBtn').onclick=()=>nextDeploy(false);
+$('previousBtn').onclick=()=>{deployIndex=Math.max(0,deployIndex-1);lastSpokenDistance=null;showDeployTarget()};
+$('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};
+$('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
 $('floatingLocateBtn').onclick=()=>startGPS(true);
 $('resumeFollowBtn').onclick=()=>startGPS(true);
 $('startWalkBtn').onclick=()=>{startGPS(true);walking=true;paused=false;poorFixStart=null;boundary=[];smooth=[];sprinklers=[];renderAll();setStatus('Recording perimeter — walk slowly, keep phone skyward')};
 $('pauseWalkBtn').onclick=()=>{paused=!paused;poorFixStart=null;updateButtons();setStatus(paused?'Recording paused':'Recording resumed')};
 $('addPointBtn').onclick=addAveragedPoint;
-$('finishWalkBtn').onclick=()=>{walking=false;paused=false;poorFixStart=null;smooth=chaikin(boundary,2);renderAll();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});setStatus('Boundary finished')};
+$('finishWalkBtn').onclick=()=>{
+  walking=false;paused=false;poorFixStart=null;
+  smooth=chaikin(boundary,2);
+  renderAll();
+  if(boundary.length) map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});
+  setStatus('Boundary finished');
+  // After finishing a boundary, gently ask about another zone
+  setTimeout(() => {
+    if(boundary.length >= 3 && confirm('Zone boundary finished.\n\nWould you like to create another zone?')){
+      // Save current then start new
+      const p = activeProject();
+      if(p){
+        const z = zoneObject();
+        const i = p.zones.findIndex(x => x.id === z.id);
+        if(i >= 0) p.zones[i] = z; else p.zones.push(z);
+        state.activeZoneId = z.id;
+        save();
+        refreshSelectors();
+      }
+      resetZone();
+      setStatus('New zone – name it and start walking');
+    }
+  }, 300);
+};
 $('smoothBtn').onclick=()=>{if(boundary.length<3)return setStatus('Add at least 3 points');smooth=chaikin(boundary,2);renderBoundary();setStatus('Boundary display smoothed')};
 $('editBtn').onclick=()=>{editMode=!editMode;addVertexMode=removeVertexMode=false;renderBoundary();updateButtons();setStatus(editMode?'Drag numbered points to adjust':'Editing finished')};
 $('addVertexBtn').onclick=()=>{addVertexMode=!addVertexMode;removeVertexMode=editMode=false;renderBoundary();setStatus(addVertexMode?'Tap the map to add boundary points':'Add-point mode off')};
@@ -438,18 +831,22 @@ $('removeVertexBtn').onclick=()=>{removeVertexMode=!removeVertexMode;addVertexMo
 $('clearBoundaryBtn').onclick=resetZone;
 $('drawAvoidBtn').onclick=()=>{drawingAvoid=true;currentAvoid=[];walking=false;renderAvoid();updateButtons();setStatus('Tap around the no-spray area')};
 $('finishAvoidBtn').onclick=()=>{if(currentAvoid.length<3)return;noSpray.push({name:$('avoidName').value.trim()||`No-spray ${noSpray.length+1}`,points:[...currentAvoid]});currentAvoid=[];drawingAvoid=false;renderAvoid();updateCoverage();updateButtons();setStatus('No-spray area saved')};
-$('deleteAvoidBtn').onclick=()=>{noSpray.pop();renderAvoid();updateCoverage()};$('clearAvoidBtn').onclick=()=>{noSpray=[];currentAvoid=[];drawingAvoid=false;renderAvoid();updateCoverage();updateButtons()};
+$('deleteAvoidBtn').onclick=()=>{noSpray.pop();renderAvoid();updateCoverage()};
+$('clearAvoidBtn').onclick=()=>{noSpray=[];currentAvoid=[];drawingAvoid=false;renderAvoid();updateCoverage();updateButtons()};
 $('invPattern').onchange=()=>{const p=$('invPattern').value;$('invRect').classList.toggle('hidden',p!=='rectangle');$('invRound').classList.toggle('hidden',p==='rectangle');$('invSector').classList.toggle('hidden',p!=='sector')};
 $('addInventoryBtn').onclick=()=>{state.inventory.push({id:uid(),name:$('invName').value.trim()||'Sprinkler',qty:Math.max(1,Number($('invQty').value)||1),pattern:$('invPattern').value,radius:Number($('invRadius').value)||35,angle:Number($('invAngle').value)||180,length:Number($('invLength').value)||50,width:Number($('invWidth').value)||30});save();refreshSelectors();setStatus('Sprinkler added')};
 $('clearInventoryBtn').onclick=()=>{state.inventory=[];save();refreshSelectors()};
-$('generateBtn').onclick=generateLayout;$('clearSprinklersBtn').onclick=()=>{sprinklers=[];renderSprinklers();setStatus('Layout cleared')};
+$('generateBtn').onclick=generateLayout;
+$('clearSprinklersBtn').onclick=()=>{sprinklers=[];renderSprinklers();hideSmartRecommendations();setStatus('Layout cleared')};
 $('newProjectBtn').onclick=()=>{const p={id:uid(),name:'New project',zones:[]};state.projects.push(p);state.activeProjectId=p.id;resetZone();save();refreshSelectors()};
 $('saveProjectBtn').onclick=()=>{const p=activeProject();if(p)p.name=$('projectName').value.trim()||p.name;save();refreshSelectors();setStatus('Project saved')};
 $('renameProjectBtn').onclick=$('saveProjectBtn').onclick;
 $('deleteProjectBtn').onclick=()=>{if(state.projects.length===1)return setStatus('At least one project is required');state.projects=state.projects.filter(p=>p.id!==state.activeProjectId);state.activeProjectId=state.projects[0].id;resetZone();save();refreshSelectors();setStatus('Project deleted')};
 $('projectSelect').onchange=()=>{state.activeProjectId=$('projectSelect').value;resetZone();save();refreshSelectors()};
 $('saveZoneBtn').onclick=()=>{const p=activeProject(),z=zoneObject(),i=p.zones.findIndex(x=>x.id===z.id);if(i>=0)p.zones[i]=z;else p.zones.push(z);state.activeZoneId=z.id;save();refreshSelectors();setStatus(`Saved ${z.name}`)};
-$('newZoneBtn').onclick=resetZone;$('loadZoneBtn').onclick=()=>{const z=activeProject()?.zones.find(x=>x.id===$('zoneSelect').value);if(z)loadZone(z)};$('zoneSelect').onchange=()=>{const z=activeProject()?.zones.find(x=>x.id===$('zoneSelect').value);if(z)loadZone(z)};
+$('newZoneBtn').onclick=resetZone;
+$('loadZoneBtn').onclick=()=>{const z=activeProject()?.zones.find(x=>x.id===$('zoneSelect').value);if(z)loadZone(z)};
+$('zoneSelect').onchange=()=>{const z=activeProject()?.zones.find(x=>x.id===$('zoneSelect').value);if(z)loadZone(z)};
 $('deleteZoneBtn').onclick=()=>{const p=activeProject(),id=$('zoneSelect').value;if(!id)return;p.zones=p.zones.filter(z=>z.id!==id);resetZone();save();refreshSelectors();setStatus('Zone deleted')};
 $('exportBtn').onclick=()=>{const p=activeProject();const blob=new Blob([JSON.stringify({version:5,project:p,inventory:state.inventory},null,2)],{type:'application/json'}),a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=`${p.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase()}.json`;a.click();URL.revokeObjectURL(url)};
 $('importInput').onchange=async e=>{try{const data=JSON.parse(await e.target.files[0].text()),p=data.project||data;if(!Array.isArray(p.zones))throw Error('Invalid project');p.id=p.id||uid();state.projects.push(p);state.activeProjectId=p.id;if(Array.isArray(data.inventory))state.inventory=data.inventory;resetZone();save();refreshSelectors();setStatus('Project imported')}catch(err){setStatus(`Import failed: ${err.message}`)}};
@@ -458,7 +855,8 @@ map.on('click',e=>{if(drawingAvoid){currentAvoid.push(e.latlng);renderAvoid();up
 
 map.on('dragstart',()=>{if(followUser){followUser=false;userMovedMap=true;$('resumeFollowBtn').classList.remove('hidden')}});
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=8;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=10;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+goToStep('project'); // start on project step
 
 // Auth button
 if($('authBtn')){
