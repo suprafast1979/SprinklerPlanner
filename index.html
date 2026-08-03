@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=14" />
+  <link rel="stylesheet" href="styles.css?v=15" />
   <style>
     .vertex-num {
       width: 22px;
@@ -261,8 +261,8 @@
         <label>Optimization mode
           <select id="priority">
             <option value="water">Water conservation</option>
-            <option value="balanced" selected>Balanced</option>
-            <option value="coverage">Maximum coverage</option>
+            <option value="balanced">Balanced (head-to-head)</option>
+            <option value="coverage" selected>Maximum coverage (overlap)</option>
           </select>
         </label>
         <label class="check">
@@ -373,6 +373,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=14"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

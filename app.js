@@ -699,6 +699,20 @@ function renderSmartRecommendations(data){
   }).join('');
 }
 
+function makeSprinkler(item, q){
+  return {
+    inventoryId: item.id,
+    name: item.name,
+    pattern: item.pattern,
+    position: q,
+    radius: ftToM(item.radius || 0),
+    angle: item.angle || 360,
+    length: ftToM(item.length || 0),
+    width: ftToM(item.width || 0)
+  };
+}
+
+// Grid + gap-fill so the whole zone gets wet (~100% with overlap).
 function generateLayout(){
   const zone = displayBoundary();
   const item = state.inventory.find(x => x.id === $('layoutSprinklerSelect').value);
@@ -714,68 +728,80 @@ function generateLayout(){
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const mode = $('priority').value;
 
+  // Tighter spacing = continuous coverage with overlap
+  // coverage: ~0.9× radius (strong overlap)
+  // balanced: 1.0× radius (classic head-to-head)
+  // water: 1.25× radius (still continuous, less overlap)
   let sx, sy;
   if(item.pattern === 'rectangle'){
-    const f = mode === 'water' ? 0.95 : mode === 'coverage' ? 0.65 : 0.8;
-    sx = ftToM(item.width) * f;
-    sy = ftToM(item.length) * f;
+    const f = mode === 'water' ? 0.85 : mode === 'coverage' ? 0.55 : 0.7;
+    sx = Math.max(ftToM(item.width || 30) * f, 1);
+    sy = Math.max(ftToM(item.length || 50) * f, 1);
   } else {
-    const r = ftToM(item.radius);
-    const f = mode === 'water' ? 1.75 : mode === 'coverage' ? 1.15 : 1.42;
-    sx = r * f;
-    sy = sx * 0.866;
+    const r = ftToM(item.radius || 35);
+    const f = mode === 'water' ? 1.25 : mode === 'coverage' ? 0.9 : 1.0;
+    sx = Math.max(r * f, 1);
+    sy = sx * 0.866; // hexagonal stagger
   }
 
-  const max = $('inventoryOnly').checked ? item.qty : 999;
+  const max = $('inventoryOnly').checked ? item.qty : 500;
   let row = 0;
   for(let y = minY; y <= maxY && sprinklers.length < max; y += sy){
-    const off = (row++ % 2) * sx / 2;
+    const off = (row++ % 2) * (sx / 2);
     for(let x = minX + off; x <= maxX && sprinklers.length < max; x += sx){
       const q = ll({x, y}, o);
       if(!candidateAllowed(q, o, poly, avoids, item)) continue;
-      sprinklers.push({
-        inventoryId: item.id,
-        name: item.name,
-        pattern: item.pattern,
-        position: q,
-        radius: ftToM(item.radius || 0),
-        angle: item.angle || 360,
-        length: ftToM(item.length || 0),
-        width: ftToM(item.width || 0)
-      });
+      if(sprinklers.some(s => dist(s.position, q) < sx * 0.45)) continue;
+      sprinklers.push(makeSprinkler(item, q));
+    }
+  }
+
+  // Gap-fill pass: keep planting on dry spots until ~full coverage
+  if(!$('inventoryOnly').checked || sprinklers.length < max){
+    const step = Math.max(sx * 0.35, 1.5);
+    let guard = 0;
+    while(sprinklers.length < max && guard++ < 100){
+      const cov = sampleCoverage();
+      if(cov && cov.coverage >= 98.5) break;
+
+      let best = null;
+      for(let y = minY; y <= maxY; y += step){
+        for(let x = minX; x <= maxX; x += step){
+          const p = {x, y};
+          if(!pip(p, poly)) continue;
+          if(avoids.some(a => pip(p, a))) continue;
+          const q = ll(p, o);
+          if(!candidateAllowed(q, o, poly, avoids, item)) continue;
+          if(sprinklers.some(s => dist(s.position, q) < sx * 0.5)) continue;
+          if(sprinklers.some(s => pointCovered(q, s))) continue;
+          best = q;
+          break;
+        }
+        if(best) break;
+      }
+      if(!best) break;
+      sprinklers.push(makeSprinkler(item, best));
     }
   }
 
   if(!sprinklers.length){
-    // Fallback: only place at centroid if it itself is allowed
     const c = centroid(zone);
     if(candidateAllowed(c, o, poly, avoids, item)){
-      sprinklers.push({
-        inventoryId: item.id,
-        name: item.name,
-        pattern: item.pattern,
-        position: c,
-        radius: ftToM(item.radius || 0),
-        angle: item.angle || 360,
-        length: ftToM(item.length || 0),
-        width: ftToM(item.width || 0)
-      });
+      sprinklers.push(makeSprinkler(item, c));
     }
   }
 
   renderSprinklers();
   const r = sampleCoverage();
 
-  // Update the simple recommendation label
   if(r){
-    if(r.coverage >= 99) $('recommendValue').textContent = 'Good';
-    else if(r.coverage >= 95) $('recommendValue').textContent = 'Minor adjustment';
+    if(r.coverage >= 99) $('recommendValue').textContent = 'Full coverage';
+    else if(r.coverage >= 95) $('recommendValue').textContent = 'Nearly full';
     else if($('inventoryOnly').checked && sprinklers.length >= item.qty)
       $('recommendValue').textContent = 'Need more units';
-    else $('recommendValue').textContent = 'Add or reposition';
+    else $('recommendValue').textContent = 'Still filling gaps';
   }
 
-  // Smart AI-style purchase recommendations (only when inventory-constrained & incomplete)
   if(r && $('inventoryOnly').checked && r.coverage < 98 && sprinklers.length >= item.qty){
     const smart = buildSmartRecommendations(r, item);
     renderSmartRecommendations(smart);
@@ -783,7 +809,8 @@ function generateLayout(){
     hideSmartRecommendations();
   }
 
-  setStatus(`Placed ${sprinklers.length} ${item.name}${sprinklers.length === 1 ? '' : 's'}`);
+  const covTxt = r ? ` • ${r.coverage.toFixed(1)}% coverage` : '';
+  setStatus(`Placed ${sprinklers.length} station${sprinklers.length === 1 ? '' : 's'}${covTxt}`);
 }
 
 
