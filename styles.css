@@ -376,3 +376,85 @@ button.full {
   .store-modal-card { border-radius: 16px; }
   .store-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* Map-only floating controls — never over the bottom panel */
+.floating-locate,
+.floating-search,
+.resume-follow {
+  position: fixed;
+  z-index: 900;
+  bottom: auto !important;
+}
+.floating-locate {
+  left: 12px;
+  top: calc(70px + 12px);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  box-shadow: 0 3px 12px #0005;
+  padding: 0;
+  background: #176b3a;
+  color: white;
+  border: 0;
+}
+.floating-search {
+  right: 12px;
+  top: calc(70px + 12px);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  font-size: 1.4rem;
+  box-shadow: 0 3px 12px #0005;
+  padding: 0;
+  background: #176b3a;
+  color: white;
+  border: 0;
+}
+.resume-follow {
+  left: 68px;
+  top: calc(70px + 16px);
+  border-radius: 22px;
+  box-shadow: 0 3px 10px #0004;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+@media(max-width:800px){
+  /* Sit near bottom edge of map (54vh), still above the panel */
+  .floating-locate {
+    top: calc(70px + 54vh - 60px);
+    left: 12px;
+  }
+  .floating-search {
+    top: calc(70px + 54vh - 60px);
+    right: 12px;
+  }
+  .resume-follow {
+    top: calc(70px + 54vh - 56px);
+    left: 68px;
+  }
+}
+@media(max-width:430px){
+  .floating-locate {
+    top: calc(64px + 54vh - 58px);
+  }
+  .floating-search {
+    top: calc(64px + 54vh - 58px);
+  }
+  .resume-follow {
+    top: calc(64px + 54vh - 54px);
+  }
+}
+
+.app-version {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ffffff30;
+  border: 1px solid #ffffff55;
+  letter-spacing: 0.02em;
+}

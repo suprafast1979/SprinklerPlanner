@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=18" />
   <style>
     .vertex-num {
       width: 22px;
@@ -28,7 +28,7 @@
 <body>
   <header>
     <div>
-      <h1>Sprinkler Planner</h1>
+      <h1>Sprinkler Planner <span id="appVersion" class="app-version">v18</span></h1>
       <p id="status">Finding your location…</p>
     </div>
     <div class="header-actions">
@@ -273,7 +273,7 @@
           <button id="generateBtn">Cover entire zone</button>
           <button id="clearSprinklersBtn" class="secondary">Clear layout</button>
         </div>
-        <p class="help">By default this places as many stations as needed for full coverage (respecting no-spray areas). Later in Set Up, mark stations complete as you rotate sprinklers through them.</p>
+        <p class="help">Places as many stations as needed for full zone coverage. Stations never sit inside a no-spray area. In Set Up, run a few at a time (well capacity) and mark each station done as you go.</p>
         <div class="metrics">
           <div><span>Sprinklers</span><strong id="sprinklerCount">0</strong></div>
           <div><span>True coverage</span><strong id="coverageValue">—</strong></div>
@@ -373,6 +373,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

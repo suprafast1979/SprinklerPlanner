@@ -1,3 +1,4 @@
+const APP_VERSION = 18;
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
 const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
 const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -530,46 +531,13 @@ function minDistToPoly(p, poly){
   return minD;
 }
 
-// True only if sprinkler center is in the zone AND its coverage does not
-// intersect any no-spray polygon.
+// Station centers must sit in the green zone and never inside a no-spray area.
+// Spray may graze no-spray at the edge — full zone coverage comes first.
+// (You sequence stations later based on well capacity / how many heads you own.)
 function candidateAllowed(q, o, poly, avoids, item){
   const p = localXY(q, o);
-  // Center must be inside the zone and outside every no-spray area
   if(!pip(p, poly)) return false;
   if(avoids.some(a => pip(p, a))) return false;
-
-  // Coverage must not reach into any no-spray area
-  if(item.pattern === 'rectangle'){
-    const halfW = ftToM(item.width || 30) / 2;
-    const halfL = ftToM(item.length || 50) / 2;
-    // Sample the rectangle corners + center edges; reject if any sample
-    // falls inside a no-spray poly or the rect overlaps one closely
-    const samples = [
-      {x: p.x - halfW, y: p.y - halfL},
-      {x: p.x + halfW, y: p.y - halfL},
-      {x: p.x + halfW, y: p.y + halfL},
-      {x: p.x - halfW, y: p.y + halfL},
-      {x: p.x, y: p.y - halfL},
-      {x: p.x, y: p.y + halfL},
-      {x: p.x - halfW, y: p.y},
-      {x: p.x + halfW, y: p.y}
-    ];
-    for(const s of samples){
-      if(avoids.some(a => pip(s, a))) return false;
-    }
-    // Also reject if any no-spray poly comes within a small margin of the rect
-    for(const a of avoids){
-      for(const ap of a){
-        if(Math.abs(ap.x - p.x) <= halfW + 0.5 && Math.abs(ap.y - p.y) <= halfL + 0.5) return false;
-      }
-    }
-  } else {
-    // Circular / sector: reject if distance to any no-spray poly < radius
-    const r = ftToM(item.radius || 35);
-    for(const a of avoids){
-      if(minDistToPoly(p, a) < r - 0.3) return false; // small tolerance
-    }
-  }
   return true;
 }
 
@@ -756,28 +724,41 @@ function generateLayout(){
     }
   }
 
-  // Gap-fill pass: keep planting on dry spots until ~full coverage
+  // Gap-fill: keep adding stations on dry ground until ~full coverage.
+  // Inventory only limits how many you RUN at once — not how many stations exist.
   if(!$('inventoryOnly').checked || sprinklers.length < max){
-    const step = Math.max(sx * 0.35, 1.5);
+    const step = Math.max(Math.min(sx * 0.25, 2.5), 0.8);
+    const minSep = Math.max(sx * 0.35, 1.0);
     let guard = 0;
-    while(sprinklers.length < max && guard++ < 100){
+    while(sprinklers.length < max && guard++ < 200){
       const cov = sampleCoverage();
-      if(cov && cov.coverage >= 98.5) break;
+      if(cov && cov.coverage >= 99.2) break;
 
       let best = null;
-      for(let y = minY; y <= maxY; y += step){
-        for(let x = minX; x <= maxX; x += step){
-          const p = {x, y};
-          if(!pip(p, poly)) continue;
-          if(avoids.some(a => pip(p, a))) continue;
-          const q = ll(p, o);
-          if(!candidateAllowed(q, o, poly, avoids, item)) continue;
-          if(sprinklers.some(s => dist(s.position, q) < sx * 0.5)) continue;
-          if(sprinklers.some(s => pointCovered(q, s))) continue;
-          best = q;
-          break;
+      // Prefer boundary vertices that are still dry (catches thin arms / corners)
+      for(const v of poly){
+        const q = ll(v, o);
+        if(!candidateAllowed(q, o, poly, avoids, item)) continue;
+        if(sprinklers.some(s => dist(s.position, q) < minSep)) continue;
+        if(sprinklers.some(s => pointCovered(q, s))) continue;
+        best = q;
+        break;
+      }
+      if(!best){
+        for(let y = minY; y <= maxY; y += step){
+          for(let x = minX; x <= maxX; x += step){
+            const p = {x, y};
+            if(!pip(p, poly)) continue;
+            if(avoids.some(a => pip(p, a))) continue;
+            const q = ll(p, o);
+            if(!candidateAllowed(q, o, poly, avoids, item)) continue;
+            if(sprinklers.some(s => dist(s.position, q) < minSep)) continue;
+            if(sprinklers.some(s => pointCovered(q, s))) continue;
+            best = q;
+            break;
+          }
+          if(best) break;
         }
-        if(best) break;
       }
       if(!best) break;
       sprinklers.push(makeSprinkler(item, best));
@@ -1073,7 +1054,84 @@ $('clearAvoidBtn').onclick=()=>{noSpray=[];currentAvoid=[];drawingAvoid=false;re
 $('invPattern').onchange=()=>{const p=$('invPattern').value;$('invRect').classList.toggle('hidden',p!=='rectangle');$('invRound').classList.toggle('hidden',p==='rectangle');$('invSector').classList.toggle('hidden',p!=='sector')};
 $('addInventoryBtn').onclick=()=>{state.inventory.push({id:uid(),name:$('invName').value.trim()||'Sprinkler',qty:Math.max(1,Number($('invQty').value)||1),pattern:$('invPattern').value,radius:Number($('invRadius').value)||35,angle:Number($('invAngle').value)||180,length:Number($('invLength').value)||50,width:Number($('invWidth').value)||30});save();refreshSelectors();setStatus('Sprinkler added')};
 $('clearInventoryBtn').onclick=()=>{state.inventory=[];save();refreshSelectors()};
-$('generateBtn').onclick=generateLayout;
+// Pre-placement analysis: confirm type is suitable before committing stations
+function analyzeLayoutFit(item){
+  const zone = displayBoundary();
+  if(zone.length < 3 || !item) return { ok:true, messages:[] };
+  const zoneAreaSqFt = area(zone) * 10.7639;
+  const messages = [];
+  let ok = true;
+
+  // Rough coverage capacity of one head
+  let headArea;
+  if(item.pattern === 'rectangle'){
+    headArea = (Number(item.length)||50) * (Number(item.width)||30);
+  } else {
+    const r = Number(item.radius)||35;
+    headArea = Math.PI * r * r;
+  }
+  const estHeads = Math.max(1, Math.ceil(zoneAreaSqFt / (headArea * 0.55)));
+
+  if(noSpray.length){
+    if(item.pattern === 'rectangle'){
+      messages.push('Oscillating / rectangular heads can be aimed and width-limited to stay off no-spray areas. Set the pattern in the field so spray stops at the red boundary.');
+    } else if(item.pattern === 'sector'){
+      messages.push('Adjustable-arc heads can be pointed away from no-spray zones. Aim the open arc into the green only.');
+    } else {
+      messages.push('Full-circle impact heads spray in all directions. Near no-spray areas some mist may reach the red edge — or switch to an adjustable-arc / oscillating head for cleaner edges.');
+    }
+  }
+
+  if(estHeads > 12 && item.pattern === 'rectangle'){
+    messages.push(`This zone is large (~${Math.round(zoneAreaSqFt).toLocaleString()} sq ft). Oscillating heads work well in bands; expect many station positions and rotate them in groups for the well.`);
+  }
+  if(estHeads > 20 && (item.pattern === 'circle' || !item.pattern)){
+    ok = true;
+    messages.push(`Large zone: roughly ${estHeads}+ stations of this type for full coverage. That is normal — run only as many as the well allows at a time.`);
+  }
+
+  // Suggest alternate type when full-circle is a poor fit next to no-spray
+  let suggestion = null;
+  if(noSpray.length && item.pattern === 'circle'){
+    const alt = state.inventory.find(x => x.id !== item.id && (x.pattern === 'sector' || x.pattern === 'rectangle'));
+    if(alt){
+      suggestion = alt;
+      messages.push(`Recommendation: try “${alt.name}” (${alt.pattern === 'rectangle' ? 'oscillating' : 'adjustable arc'}) for better control next to no-spray areas.`);
+    } else {
+      messages.push('Recommendation: an oscillating or adjustable-arc sprinkler is usually better than a full-circle impact when buildings/driveways sit on the edge. Check the Store under Inventory.');
+    }
+  }
+
+  return { ok, messages, estHeads, suggestion };
+}
+
+function requestLayout(){
+  const item = state.inventory.find(x => x.id === $('layoutSprinklerSelect').value);
+  const zone = displayBoundary();
+  if(zone.length < 3) return setStatus('Finish a zone boundary first');
+  if(!item) return setStatus('Add a sprinkler to inventory first');
+
+  const analysis = analyzeLayoutFit(item);
+  if(analysis.messages.length){
+    const lines = analysis.messages.map((m,i) => `${i+1}. ${m}`).join('\n\n');
+    const extra = analysis.suggestion
+      ? `\n\nSwitch to “${analysis.suggestion.name}” before placing? (Cancel = stay on ${item.name} and place anyway)`
+      : `\n\nPlace stations with “${item.name}” now?`;
+    const proceed = confirm(`Before placing stations:\n\n${lines}${extra}`);
+    if(!proceed){
+      if(analysis.suggestion){
+        $('layoutSprinklerSelect').value = analysis.suggestion.id;
+        setStatus(`Switched to ${analysis.suggestion.name} — tap Cover entire zone again when ready`);
+      } else {
+        setStatus('Placement cancelled — adjust sprinkler type or zone, then try again');
+      }
+      return;
+    }
+  }
+  generateLayout();
+}
+
+$('generateBtn').onclick=requestLayout;
 $('clearSprinklersBtn').onclick=()=>{sprinklers=[];renderSprinklers();hideSmartRecommendations();setStatus('Layout cleared')};
 $('newProjectBtn').onclick=()=>{const p={id:uid(),name:'New project',zones:[]};state.projects.push(p);state.activeProjectId=p.id;resetZone();save();refreshSelectors()};
 $('saveProjectBtn').onclick=()=>{const p=activeProject();if(p)p.name=$('projectName').value.trim()||p.name;save();refreshSelectors();setStatus('Project saved')};
@@ -1210,6 +1268,7 @@ if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
 state.version=13;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
+if($('appVersion')) $('appVersion').textContent = 'v' + APP_VERSION;
 
 // Auth button
 if($('authBtn')){
