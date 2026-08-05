@@ -1,4 +1,4 @@
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
 const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
 const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -952,21 +952,53 @@ function renderAimRecommendations(){
 }
 
 
+// Zones for the project you are currently working on only (not every project)
+function activeProjectZones(){
+  const p = activeProject();
+  if(!p) return [];
+  return (p.zones||[]).map(z => ({project:p, zone:z}));
+}
 function allSavedZones(){
+  // Kept for rare full-list needs; Set Up uses activeProjectZones()
   const out=[];
   state.projects.forEach(p=>(p.zones||[]).forEach(z=>out.push({project:p,zone:z})));
   return out;
 }
 function zoneCenter(z){const pts=(z.smooth?.length?z.smooth:z.boundary)||[];return pts.length?centroid(pts):null}
 function refreshDeployChoices(){
-  const zones=allSavedZones(),sel=$('deployZoneSelect');
-  sel.innerHTML=zones.length?zones.map(({project,zone})=>`<option value="${project.id}|${zone.id}">${project.name} — ${zone.name}</option>`).join(''):'<option value="">No saved zones</option>';
+  const zones = activeProjectZones();
+  const sel = $('deployZoneSelect');
+  if(!sel) return;
+  const p = activeProject();
+  if(!zones.length){
+    sel.innerHTML = '<option value="">No zones in this project yet</option>';
+    return;
+  }
+  // Zone name only — project is already implied
+  sel.innerHTML = zones.map(({zone}) =>
+    `<option value="${p.id}|${zone.id}">${zone.name}${zone.sprinklers?.length ? ` (${zone.sprinklers.length} stations)` : ''}</option>`
+  ).join('');
+  // Prefer currently active zone if it belongs to this project
+  if(state.activeZoneId && zones.some(x => x.zone.id === state.activeZoneId)){
+    sel.value = `${p.id}|${state.activeZoneId}`;
+  }
 }
 function selectNearestDeployZone(){
-  refreshDeployChoices(); if(!currentPosition)return;
-  let best=null,bestD=Infinity;
-  allSavedZones().forEach(x=>{const c=zoneCenter(x.zone);if(c){const d=dist(currentPosition,c);if(d<bestD){bestD=d;best=x}}});
-  if(best){$('deployZoneSelect').value=`${best.project.id}|${best.zone.id}`;$('deploySubtitle').textContent=bestD<160?`${best.zone.name} is ${Math.round(mToFt(bestD))} ft away.`:`Closest saved layout: ${best.project.name} — ${best.zone.name}`}
+  refreshDeployChoices();
+  if(!currentPosition) return;
+  let best=null, bestD=Infinity;
+  activeProjectZones().forEach(x=>{
+    const c=zoneCenter(x.zone);
+    if(c){ const d=dist(currentPosition,c); if(d<bestD){ bestD=d; best=x; } }
+  });
+  if(best){
+    $('deployZoneSelect').value = `${best.project.id}|${best.zone.id}`;
+    $('deploySubtitle').textContent = bestD<160
+      ? `${best.zone.name} is ${Math.round(mToFt(bestD))} ft away.`
+      : `Closest zone in this project: ${best.zone.name}`;
+  } else if(activeProject()){
+    $('deploySubtitle').textContent = `Project: ${activeProject().name}`;
+  }
 }
 function selectedDeployZone(){
   const [pid,zid]=($('deployZoneSelect').value||'|').split('|');
@@ -1552,7 +1584,7 @@ if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
 if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=23;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=24;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 if($('appVersion')) $('appVersion').textContent = 'v' + APP_VERSION;
 
