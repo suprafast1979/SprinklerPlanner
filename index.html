@@ -7,7 +7,7 @@
   <title>Sprinkler Planner</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=21" />
+  <link rel="stylesheet" href="styles.css?v=23" />
   <style>
     .vertex-num {
       width: 22px;
@@ -28,7 +28,7 @@
 <body>
   <header>
     <div>
-      <h1>Sprinkler Planner <span id="appVersion" class="app-version">v21</span></h1>
+      <h1>Sprinkler Planner <span id="appVersion" class="app-version">v23</span></h1>
       <p id="status">Finding your location…</p>
     </div>
     <div class="header-actions">
@@ -162,91 +162,103 @@
       <!-- ========== STEP 2: ZONES ========== -->
       <div id="stepZones" class="wizard-step">
         <h2 class="step-title">Zones</h2>
-        <p class="step-desc">Walk the perimeter of each area you want to water.</p>
+        <p class="step-desc">Pick or create a zone, then record its outline. One step at a time.</p>
 
-        <label>Select zone
-          <select id="zoneSelect"></select>
-        </label>
-        <label>Zone name
-          <input id="zoneName" placeholder="Back yard, pasture, orchard…" />
-        </label>
-        <div class="row">
-          <button id="newZoneBtn">New zone</button>
-          <button id="saveZoneBtn">Save zone</button>
-        </div>
-        <div class="row">
-          <button id="loadZoneBtn" class="secondary">Load zone</button>
-          <button id="deleteZoneBtn" class="danger">Delete zone</button>
-        </div>
-
-        <hr />
-        <h3 class="subhead">Record perimeter</h3>
-        <p class="help">Phone: walk with GPS. Desktop: use click or freehand below.</p>
-        <div class="row">
-          <button id="startWalkBtn">Start walking (GPS)</button>
-          <button id="pauseWalkBtn" disabled>Pause</button>
-        </div>
-        <div class="row">
-          <button id="addPointBtn" class="secondary">Add averaged GPS point</button>
-          <button id="finishWalkBtn" disabled>Finish boundary</button>
+        <!-- A: choose / name zone -->
+        <div id="zonePhasePick" class="zone-phase">
+          <label>Select existing zone
+            <select id="zoneSelect"></select>
+          </label>
+          <label>Zone name
+            <input id="zoneName" placeholder="Back yard, pasture, orchard…" />
+          </label>
+          <div class="row">
+            <button id="newZoneBtn">New zone</button>
+            <button id="loadZoneBtn" class="secondary">Load selected</button>
+          </div>
+          <div class="row">
+            <button id="saveZoneBtn">Save zone</button>
+            <button id="deleteZoneBtn" class="danger">Delete</button>
+          </div>
+          <div class="wizard-nav">
+            <button id="backToProjectBtn" class="secondary">← Project</button>
+            <button id="zoneGoRecordBtn" class="primary">Next: record outline →</button>
+          </div>
         </div>
 
-        <div class="draw-modes">
-          <span class="draw-label">Desktop draw:</span>
-          <button id="drawClickBtn" class="secondary">Click points</button>
-          <button id="drawFreehandBtn" class="secondary">Freehand drag</button>
-          <button id="drawOffBtn" class="secondary">Off</button>
+        <!-- B: record perimeter only -->
+        <div id="zonePhaseRecord" class="zone-phase hidden">
+          <p class="help">Phone: walk with GPS. Desktop: click points or freehand.</p>
+          <div class="row">
+            <button id="startWalkBtn">Start walking (GPS)</button>
+            <button id="pauseWalkBtn" disabled>Pause</button>
+          </div>
+          <div class="row">
+            <button id="addPointBtn" class="secondary">Add GPS point</button>
+            <button id="finishWalkBtn" disabled>Finish boundary</button>
+          </div>
+          <div class="draw-modes">
+            <span class="draw-label">Desktop:</span>
+            <button id="drawClickBtn" class="secondary">Click points</button>
+            <button id="drawFreehandBtn" class="secondary">Freehand</button>
+            <button id="drawOffBtn" class="secondary">Off</button>
+          </div>
+          <details class="zone-advanced">
+            <summary>Advanced (edit / accuracy)</summary>
+            <div class="row">
+              <button id="smoothBtn" class="secondary">Smooth display</button>
+              <button id="editBtn" class="secondary">Edit points</button>
+            </div>
+            <div class="row">
+              <button id="addVertexBtn" class="secondary">Add point</button>
+              <button id="removeVertexBtn" class="secondary">Remove point</button>
+            </div>
+            <div class="row one">
+              <button id="clearBoundaryBtn" class="danger">Clear outline</button>
+            </div>
+            <label>Max GPS accuracy
+              <select id="accuracyLimit">
+                <option value="3.05">10 ft</option>
+                <option value="4.88" selected>16 ft</option>
+                <option value="7.92">26 ft</option>
+                <option value="11.89">39 ft</option>
+              </select>
+            </label>
+          </details>
+          <div class="metrics">
+            <div><span>GPS accuracy</span><strong id="accuracy">—</strong></div>
+            <div><span>Points</span><strong id="pointCount">0</strong></div>
+            <div><span>Area</span><strong id="areaValue">—</strong></div>
+          </div>
+          <div class="wizard-nav">
+            <button id="zoneBackPickBtn" class="secondary">← Zone name</button>
+            <button id="zoneGoAvoidBtn" class="primary">Next: no-spray →</button>
+          </div>
         </div>
 
-        <div class="row">
-          <button id="smoothBtn" class="secondary">Smooth display</button>
-          <button id="editBtn" class="secondary">Edit points</button>
-        </div>
-        <div class="row">
-          <button id="addVertexBtn" class="secondary">Add point by tapping</button>
-          <button id="removeVertexBtn" class="secondary">Remove point by tapping</button>
-        </div>
-        <div class="row one">
-          <button id="clearBoundaryBtn" class="danger">Clear current zone</button>
-        </div>
-
-        <label>Maximum accepted GPS accuracy
-          <select id="accuracyLimit">
-            <option value="3.05">10 ft</option>
-            <option value="4.88" selected>16 ft</option>
-            <option value="7.92">26 ft</option>
-            <option value="11.89">39 ft</option>
-          </select>
-        </label>
-
-        <div class="metrics">
-          <div><span>GPS accuracy</span><strong id="accuracy">—</strong></div>
-          <div><span>Recorded points</span><strong id="pointCount">0</strong></div>
-          <div><span>Area</span><strong id="areaValue">—</strong></div>
-        </div>
-
-        <hr />
-        <h3 class="subhead">No-spray areas</h3>
-        <label>No-spray area name
-          <input id="avoidName" placeholder="Building, driveway, garden…" />
-        </label>
-        <div class="row">
-          <button id="drawAvoidBtn">Draw no-spray area</button>
-          <button id="finishAvoidBtn" disabled>Finish area</button>
-        </div>
-        <div class="row">
-          <button id="deleteAvoidBtn" class="secondary">Delete last area</button>
-          <button id="clearAvoidBtn" class="danger">Clear all</button>
-        </div>
-        <div class="metrics">
-          <div><span>No-spray areas</span><strong id="avoidCount">0</strong></div>
-          <div><span>Drawing</span><strong id="avoidDrawing">No</strong></div>
-          <div><span>Active zone</span><strong id="activeZoneLabel">—</strong></div>
-        </div>
-
-        <div class="wizard-nav">
-          <button id="backToProjectBtn" class="secondary">← Project</button>
-          <button id="finishZonesBtn" class="primary">Done with zones →</button>
+        <!-- C: no-spray only -->
+        <div id="zonePhaseAvoid" class="zone-phase hidden">
+          <p class="help">Mark buildings, driveways, or anything that must stay dry.</p>
+          <label>No-spray name
+            <input id="avoidName" placeholder="Building, driveway, garden…" />
+          </label>
+          <div class="row">
+            <button id="drawAvoidBtn">Draw no-spray</button>
+            <button id="finishAvoidBtn" disabled>Finish area</button>
+          </div>
+          <div class="row">
+            <button id="deleteAvoidBtn" class="secondary">Delete last</button>
+            <button id="clearAvoidBtn" class="danger">Clear all</button>
+          </div>
+          <div class="metrics">
+            <div><span>No-spray areas</span><strong id="avoidCount">0</strong></div>
+            <div><span>Drawing</span><strong id="avoidDrawing">No</strong></div>
+            <div><span>Active zone</span><strong id="activeZoneLabel">—</strong></div>
+          </div>
+          <div class="wizard-nav">
+            <button id="zoneBackRecordBtn" class="secondary">← Outline</button>
+            <button id="finishZonesBtn" class="primary">Done → Layout</button>
+          </div>
         </div>
       </div>
 
@@ -373,6 +385,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=23"></script>
 </body>
 </html>

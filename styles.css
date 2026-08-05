@@ -470,3 +470,60 @@ button.full {
   box-shadow: 0 0 0 4px #fff, 0 0 12px #176b3a !important;
   transform: scale(1.15);
 }
+
+/* Zone sub-phases — one screen at a time */
+.zone-phase { margin-top: 4px; }
+.zone-advanced {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid #d5e0d8;
+  border-radius: 10px;
+  background: #f7faf8;
+}
+.zone-advanced summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #176b3a;
+  font-size: 0.9rem;
+}
+
+/* Floating controls: stay on MAP, not over panel buttons */
+.floating-search {
+  opacity: 0.55 !important;
+  background: #176b3acc !important;
+  backdrop-filter: blur(2px);
+  z-index: 850 !important;
+}
+.floating-search:active,
+.floating-search:hover {
+  opacity: 1 !important;
+}
+.floating-locate {
+  z-index: 850 !important;
+}
+/* Always top of map on phone so they never cover Start setup / menus */
+@media(max-width:800px){
+  .floating-locate {
+    top: calc(70px + 10px) !important;
+    left: 10px !important;
+    bottom: auto !important;
+  }
+  .floating-search {
+    top: calc(70px + 10px) !important;
+    right: 10px !important;
+    bottom: auto !important;
+  }
+  .resume-follow {
+    top: calc(70px + 14px) !important;
+    left: 64px !important;
+    bottom: auto !important;
+  }
+}
+/* Hide locate when not useful (deploy + already following) */
+.floating-locate.dimmed {
+  opacity: 0.35;
+  pointer-events: auto;
+}
+body.mode-deploy .floating-locate {
+  display: none;
+}

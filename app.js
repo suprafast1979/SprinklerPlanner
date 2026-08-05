@@ -1,4 +1,4 @@
-const APP_VERSION = 21;
+const APP_VERSION = 23;
 const $=id=>document.getElementById(id), setStatus=t=>$('status').textContent=t;
 const map=L.map('map',{maxZoom:22, zoomControl:true}).setView([44.05,-123.1],17);
 const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -195,6 +195,36 @@ function save(){
 function activeProject(){return state.projects.find(p=>p.id===state.activeProjectId)}
 function activeZone(){return activeProject()?.zones.find(z=>z.id===state.activeZoneId)}
 function zoneObject(){return{id:state.activeZoneId||uid(),name:$('zoneName').value.trim()||'Unnamed zone',boundary,smooth,noSpray,sprinklers:sprinklers.map(s=>({...s,layer:undefined})),updated:new Date().toISOString()}}
+
+// Write current map layout into the active zone record so Set Up can find it
+function persistActiveZoneLayout(){
+  const p = activeProject();
+  if(!p) return false;
+  // Prefer matching active zone; otherwise match by name
+  let z = p.zones.find(x => x.id === state.activeZoneId);
+  if(!z && $('zoneName')?.value){
+    const name = $('zoneName').value.trim();
+    z = p.zones.find(x => x.name === name);
+  }
+  if(!z){
+    // Create zone from current map so layout is not lost
+    if(boundary.length < 3) return false;
+    z = zoneObject();
+    p.zones.push(z);
+    state.activeZoneId = z.id;
+  } else {
+    z.boundary = boundary.map(pt => ({...pt}));
+    z.smooth = (smooth||[]).map(pt => ({...pt}));
+    z.noSpray = noSpray.map(a => ({name:a.name, points:a.points.map(pt=>({...pt}))}));
+    z.sprinklers = sprinklers.map(s => ({...s, layer:undefined}));
+    z.updated = new Date().toISOString();
+    if($('zoneName')?.value) z.name = $('zoneName').value.trim() || z.name;
+  }
+  save();
+  refreshSelectors();
+  refreshDeployChoices();
+  return true;
+}
 function loadZone(z){state.activeZoneId=z.id;boundary=(z.boundary||[]).map(p=>({...p}));smooth=(z.smooth||[]).map(p=>({...p}));noSpray=(z.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(z.sprinklers||[]).map(s=>({...s}));$('zoneName').value=z.name;walking=paused=drawingAvoid=editMode=addVertexMode=removeVertexMode=false;poorFixStart=null;renderAll();hideSmartRecommendations();if(boundary.length)map.fitBounds(L.latLngBounds(displayBoundary()),{padding:[25,25]});refreshSelectors();setStatus(`Loaded ${z.name}`)}
 function resetZone(){state.activeZoneId=null;boundary=[];smooth=[];noSpray=[];sprinklers=[];currentAvoid=[];$('zoneName').value='New zone';walking=paused=false;poorFixStart=null;renderAll();hideSmartRecommendations();refreshSelectors();setStatus('New blank zone')}
 
@@ -877,10 +907,13 @@ function generateLayout(){
 
   renderAimRecommendations();
 
+  // Always persist so Set Up sees the same stations you see on the map
+  persistActiveZoneLayout();
+
   const aimed = sprinklers.filter(s => s.aimNote).length;
   const covTxt = r ? ` • ${r.coverage.toFixed(1)}% coverage` : '';
   const aimTxt = aimed ? ` • ${aimed} adjustable near no-spray` : '';
-  setStatus(`Placed ${sprinklers.length} station${sprinklers.length === 1 ? '' : 's'}${covTxt}${aimTxt}`);
+  setStatus(`Placed ${sprinklers.length} station${sprinklers.length === 1 ? '' : 's'}${covTxt}${aimTxt} • saved to zone`);
 }
 
 function renderAimRecommendations(){
@@ -941,10 +974,18 @@ function selectedDeployZone(){
 }
 function setMode(mode){
   currentMode=mode;
+  document.body.classList.toggle('mode-deploy', mode==='deploy');
+  document.body.classList.toggle('mode-planner', mode==='planner');
   $('plannerPanel').classList.toggle('hidden',mode!=='planner');$('deployPanel').classList.toggle('hidden',mode!=='deploy');
   $('plannerModeBtn').classList.toggle('active',mode==='planner');$('deployModeBtn').classList.toggle('active',mode==='deploy');
+  if($('floatingLocateBtn')) $('floatingLocateBtn').classList.toggle('hidden', mode==='deploy');
   if(mode==='deploy'){refreshDeployChoices();selectNearestDeployZone();followUser=true;startGPS(true)}
   setTimeout(()=>map.invalidateSize(),80);
+}
+function showZonePhase(phase){
+  ['zonePhasePick','zonePhaseRecord','zonePhaseAvoid'].forEach(id=>{
+    const el=$(id); if(el) el.classList.toggle('hidden', id!==phase);
+  });
 }
 function firstIncompleteIndex(){
   for(let i=0;i<sprinklers.length;i++) if(!deployed.has(i)) return i;
@@ -962,13 +1003,32 @@ function prevIncompleteIndex(from){
 function beginDeployment(resume=false){
   const chosen=selectedDeployZone();if(!chosen?.zone)return setStatus('Save a zone first');
   deployZone=chosen.zone;
-  if(!deployZone.sprinklers?.length){$('deployEmpty').classList.remove('hidden');$('deployActive').classList.add('hidden');return setStatus('This zone has no saved sprinkler layout')}
-  $('deployEmpty').classList.add('hidden');$('deployActive').classList.remove('hidden');
+
+  // If the map already has stations for this work session, save them onto the zone
+  if((!deployZone.sprinklers || !deployZone.sprinklers.length) && sprinklers.length){
+    state.activeZoneId = deployZone.id;
+    persistActiveZoneLayout();
+    // re-read after persist
+    const refreshed = selectedDeployZone();
+    if(refreshed?.zone) deployZone = refreshed.zone;
+  }
+
+  if(!deployZone.sprinklers?.length){
+    $('deployEmpty').classList.remove('hidden');
+    $('deployActive').classList.add('hidden');
+    setStatus('No stations saved on this zone yet — open Plan → Layout → Cover entire zone, then come back');
+    return;
+  }
+
+  $('deployEmpty').classList.add('hidden');
+  $('deployActive').classList.remove('hidden');
   if(!resume){deployed=new Set(); deployIndex=0;}
-  boundary=(deployZone.boundary||[]).map(p=>({...p}));smooth=(deployZone.smooth||[]).map(p=>({...p}));noSpray=(deployZone.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));sprinklers=(deployZone.sprinklers||[]).map(s=>({...s}));
-  // Always start guidance on the first station that is not done yet
+  boundary=(deployZone.boundary||[]).map(p=>({...p}));
+  smooth=(deployZone.smooth||[]).map(p=>({...p}));
+  noSpray=(deployZone.noSpray||[]).map(a=>({name:a.name,points:a.points.map(p=>({...p}))}));
+  sprinklers=(deployZone.sprinklers||[]).map(s=>({...s}));
   deployIndex = firstIncompleteIndex();
-  renderAll();showDeployTarget();startGPS(true);setStatus(`Setting up ${deployZone.name}`);
+  renderAll();showDeployTarget();startGPS(true);setStatus(`Setting up ${deployZone.name} — ${sprinklers.length} stations`);
 }
 function speak(text){if(!$('voiceGuidance')?.checked||!('speechSynthesis'in window))return; speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(text))}
 function showDeployTarget(){
@@ -1065,24 +1125,28 @@ function goToStep(step){
             (s === 'zones' && step === 'layout')) btn.classList.add('done');
   });
 
+  if(step === 'zones') showZonePhase('zonePhasePick');
+
   setTimeout(() => map.invalidateSize(), 80);
   setStatus(step === 'project' ? 'Project' :
-            step === 'zones' ? 'Zones – walk perimeters' :
+            step === 'zones' ? 'Zones – pick or create a zone' :
             step === 'layout' ? 'Layout – optimize sprinklers' :
             step === 'inventory' ? 'Inventory' : '');
 }
 
 // Wizard nav buttons
-if($('toZonesBtn')) $('toZonesBtn').onclick = () => goToStep('zones');
+if($('toZonesBtn')) $('toZonesBtn').onclick = () => { goToStep('zones'); showZonePhase('zonePhasePick'); };
 if($('backToProjectBtn')) $('backToProjectBtn').onclick = () => goToStep('project');
+if($('zoneGoRecordBtn')) $('zoneGoRecordBtn').onclick = () => showZonePhase('zonePhaseRecord');
+if($('zoneBackPickBtn')) $('zoneBackPickBtn').onclick = () => showZonePhase('zonePhasePick');
+if($('zoneGoAvoidBtn')) $('zoneGoAvoidBtn').onclick = () => showZonePhase('zonePhaseAvoid');
+if($('zoneBackRecordBtn')) $('zoneBackRecordBtn').onclick = () => showZonePhase('zonePhaseRecord');
 if($('finishZonesBtn')) $('finishZonesBtn').onclick = () => {
-  // Soft prompt: if they have zones, continue; otherwise remind
   const p = activeProject();
   if(!p?.zones?.length && boundary.length < 3){
     setStatus('Save at least one zone (or finish a boundary) before continuing');
     return;
   }
-  // Auto-save current zone if it has a boundary
   if(boundary.length >= 3){
     const z = zoneObject();
     const i = p.zones.findIndex(x => x.id === z.id);
@@ -1093,7 +1157,7 @@ if($('finishZonesBtn')) $('finishZonesBtn').onclick = () => {
   }
   goToStep('layout');
 };
-if($('backToZonesBtn')) $('backToZonesBtn').onclick = () => goToStep('zones');
+if($('backToZonesBtn')) $('backToZonesBtn').onclick = () => { goToStep('zones'); showZonePhase('zonePhasePick'); };
 if($('goDeployBtn')) $('goDeployBtn').onclick = () => setMode('deploy');
 if($('goInventoryBtn')) $('goInventoryBtn').onclick = () => goToStep('inventory');
 if($('backFromInventoryBtn')) $('backFromInventoryBtn').onclick = () => goToStep('project');
@@ -1197,7 +1261,22 @@ $('previousBtn').onclick=()=>{
   showDeployTarget();
 };
 $('endDeployBtn').onclick=()=>{$('deployActive').classList.add('hidden');deployZone=null;setStatus('Setup ended')};
-$('deployZoneSelect').onchange=()=>{const x=selectedDeployZone();$('deployTitle').textContent=x?.zone?.name||'Choose a saved layout'};
+$('deployZoneSelect').onchange=()=>{
+  const x=selectedDeployZone();
+  $('deployTitle').textContent=x?.zone?.name||'Choose a saved layout';
+  const hasLayout = !!(x?.zone?.sprinklers?.length);
+  const hasMapLayout = sprinklers.length > 0;
+  if($('deployEmpty')){
+    if(hasLayout){
+      $('deployEmpty').classList.add('hidden');
+    } else {
+      $('deployEmpty').classList.remove('hidden');
+      $('deployEmpty').textContent = hasMapLayout
+        ? 'Stations are on the map but not stored on this saved zone yet. Tap Start setup to save them, or open Plan → Layout and run Cover entire zone so they are written to the zone.'
+        : 'This saved zone does not have a sprinkler layout yet. Open Plan mode → Layout → Cover entire zone, then return here.';
+    }
+  }
+};
 $('floatingLocateBtn').onclick=()=>startGPS(true);
 $('resumeFollowBtn').onclick=()=>startGPS(true);
 $('startWalkBtn').onclick=()=>{startGPS(true);walking=true;paused=false;poorFixStart=null;boundary=[];smooth=[];sprinklers=[];renderAll();setStatus('Recording perimeter — walk slowly, keep phone skyward')};
@@ -1473,7 +1552,7 @@ if($('resetCycleBtn')) $('resetCycleBtn').onclick = resetWateringCycle;
 if($('resetCycleBtn2')) $('resetCycleBtn2').onclick = resetWateringCycle;
 
 try{state=JSON.parse(localStorage.getItem(STORE))||defaultState()}catch{state=defaultState()}if(!state.projects?.length)state=defaultState();
-state.version=21;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
+state.version=23;refreshSelectors();refreshDeployChoices();renderAll();save();startGPS(true);
 goToStep('project'); // start on project step
 if($('appVersion')) $('appVersion').textContent = 'v' + APP_VERSION;
 
